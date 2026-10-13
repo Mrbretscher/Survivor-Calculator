@@ -45,6 +45,10 @@ class FeatureBuildTests(unittest.TestCase):
     def test_feature_columns_do_not_include_known_leakage_targets(self) -> None:
         assert_no_leakage_columns(FEATURE_COLUMNS)
 
+    def test_leakage_guard_rejects_target_columns(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Potential leakage columns"):
+            assert_no_leakage_columns((*FEATURE_COLUMNS, "target_next_boot"))
+
     def test_soc_mapping_covers_every_distinct_fixture_occupation(self) -> None:
         occupations = {
             (row.get("occupation") or "").strip()

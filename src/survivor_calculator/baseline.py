@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
 
+from survivor_calculator.evaluation import evaluate_chronological as _evaluate_chronological
 from survivor_calculator.features import FEATURE_COLUMNS, FeatureBuildResult, assert_no_leakage_columns
 
 
@@ -100,7 +100,7 @@ def build_predictions(features: FeatureBuildResult, workbook_path: str | Path) -
         if int(row["season"]) < features.current_season
     ]
     model = HistoricalRateModel().fit(train_rows)
-    evaluation = evaluate_chronological(features.historical_rows)
+    evaluation = _evaluate_chronological(features.historical_rows, HistoricalRateModel)
 
     raw_player_rows = []
     for row in features.current_rows:
@@ -145,55 +145,9 @@ def build_predictions(features: FeatureBuildResult, workbook_path: str | Path) -
 
 
 def evaluate_chronological(rows: list[dict[str, object]], holdout_seasons: int = 5) -> dict[str, object]:
-    completed_seasons = sorted({int(row["season"]) for row in rows})
-    if len(completed_seasons) <= holdout_seasons:
-        return {"status": "skipped", "reason": "Not enough completed seasons for chronological holdout."}
-    holdout = set(completed_seasons[-holdout_seasons:])
-    train = [row for row in rows if int(row["season"]) not in holdout]
-    test = [row for row in rows if int(row["season"]) in holdout]
-    model = HistoricalRateModel().fit(train)
+    """Evaluate the historical-rate baseline with a chronological holdout split."""
 
-    grouped: dict[tuple[int, int, int], list[tuple[dict[str, object], float]]] = defaultdict(list)
-    for row in test:
-        key = (int(row["season"]), int(row["episode"]), int(row["n_boots"]))
-        grouped[key].append((row, model.predict_risk(row)))
-
-    top1_hits = 0
-    top3_hits = 0
-    brier_values: list[float] = []
-    log_losses: list[float] = []
-    evaluated_events = 0
-    for candidates in grouped.values():
-        actual = [row for row, _risk in candidates if row["target_next_boot"] == 1]
-        if not actual:
-            continue
-        evaluated_events += 1
-        ranked = sorted(candidates, key=lambda item: item[1], reverse=True)
-        actual_id = actual[0]["castaway_id"]
-        if ranked[0][0]["castaway_id"] == actual_id:
-            top1_hits += 1
-        if any(row["castaway_id"] == actual_id for row, _risk in ranked[:3]):
-            top3_hits += 1
-
-        total_risk = sum(risk for _row, risk in candidates) or 1.0
-        for row, risk in candidates:
-            probability = min(max(risk / total_risk, 1e-6), 1.0 - 1e-6)
-            target = float(row["target_next_boot"])
-            brier_values.append((probability - target) ** 2)
-            if target:
-                log_losses.append(-math.log(probability))
-
-    if evaluated_events == 0:
-        return {"status": "skipped", "reason": "No holdout boot events found."}
-    return {
-        "status": "ok",
-        "holdout_seasons": sorted(holdout),
-        "events": evaluated_events,
-        "top1_accuracy": top1_hits / evaluated_events,
-        "top3_recall": top3_hits / evaluated_events,
-        "brier_score": mean(brier_values) if brier_values else None,
-        "log_loss": mean(log_losses) if log_losses else None,
-    }
+    return _evaluate_chronological(rows, HistoricalRateModel, holdout_seasons)
 
 
 def save_predictions(bundle: PredictionBundle, output_path: str | Path) -> Path:
