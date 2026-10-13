@@ -31,7 +31,7 @@ def minimal_core_tables() -> dict[str, list[dict[str, str | None]]]:
             _state("2", "1", "0", "2", "S2-C", "Cam", "Luma", "Tribal"),
             _state("2", "1", "0", "2", "S2-D", "Dee", "Luma", "Tribal"),
             _state("2", "2", "0", "2", "S2-C", "Cam", "Luma", "Tribal"),
-            _state("2", "2", "0", "2", "S2-D", "Dee", "Luma", "Tribal"),
+            _state("2", "2", "0", "2", "S2-D", "Dee", "Koru", "Tribal"),
         ],
         "Vote History": [
             {"season": "1", "episode": "1", "castaway_id": "S1-B", "vote_id": "S1-A", "nullified": "0"},

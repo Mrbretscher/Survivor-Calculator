@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from collections import defaultdict
 from statistics import mean
 from typing import Callable, Protocol
@@ -23,6 +24,9 @@ class RiskModel(Protocol):
 RiskScorer = Callable[[dict[str, object]], float]
 
 PRIMARY_MODEL_NAME = "historical_rate_baseline"
+DEFAULT_HOLDOUT_POOL_SIZE = 10
+DEFAULT_HOLDOUT_SEASONS_PER_POOL = 2
+DEFAULT_HOLDOUT_RANDOM_SEED = 42
 
 
 def evaluate_chronological(
@@ -50,6 +54,98 @@ def evaluate_chronological(
     test = [row for row in rows if int(row["season"]) in set(holdout)]
     assert_chronological_split(train, test)
 
+    return _evaluate_split(
+        train,
+        test,
+        model_factory,
+        model_name=model_name,
+        comparison_model_factories=comparison_model_factories,
+        split={
+            "strategy": "chronological_holdout_by_season",
+            "training_seasons": sorted({int(row["season"]) for row in train}),
+            "holdout_seasons": holdout,
+            "training_rows": len(train),
+            "holdout_rows": len(test),
+        },
+    )
+
+
+def evaluate_pooled_random_holdout(
+    rows: list[dict[str, object]],
+    model_factory: Callable[[], RiskModel],
+    pool_size: int = DEFAULT_HOLDOUT_POOL_SIZE,
+    holdout_seasons_per_pool: int = DEFAULT_HOLDOUT_SEASONS_PER_POOL,
+    random_seed: int = DEFAULT_HOLDOUT_RANDOM_SEED,
+    model_name: str = PRIMARY_MODEL_NAME,
+    comparison_model_factories: dict[str, Callable[[], RiskModel]] | None = None,
+) -> dict[str, object]:
+    """Evaluate on random seasons drawn from chronological season pools.
+
+    The default split creates chronological pools of ten completed seasons and
+    holds out two seasons from each pool, producing an 80/20 season split for
+    the current 50 completed-season data set.
+    """
+
+    assert_no_leakage_columns(FEATURE_COLUMNS)
+    completed_seasons = sorted({int(row["season"]) for row in rows})
+    if pool_size <= 0 or holdout_seasons_per_pool <= 0:
+        raise ValueError("pool_size and holdout_seasons_per_pool must be positive.")
+    if holdout_seasons_per_pool >= pool_size:
+        raise ValueError("holdout_seasons_per_pool must be smaller than pool_size.")
+    if len(completed_seasons) < pool_size:
+        return {"status": "skipped", "reason": "Not enough completed seasons for pooled random holdout."}
+
+    pools = [
+        completed_seasons[index : index + pool_size]
+        for index in range(0, len(completed_seasons), pool_size)
+    ]
+    full_pools = [pool for pool in pools if len(pool) == pool_size]
+    if not full_pools:
+        return {"status": "skipped", "reason": "No complete season pools available for pooled random holdout."}
+
+    rng = random.Random(random_seed)
+    holdout = sorted(
+        season
+        for pool in full_pools
+        for season in rng.sample(pool, holdout_seasons_per_pool)
+    )
+    holdout_set = set(holdout)
+    train = [row for row in rows if int(row["season"]) not in holdout_set]
+    test = [row for row in rows if int(row["season"]) in holdout_set]
+    assert_disjoint_season_split(train, test)
+
+    return _evaluate_split(
+        train,
+        test,
+        model_factory,
+        model_name=model_name,
+        comparison_model_factories=comparison_model_factories,
+        split={
+            "strategy": "pooled_random_holdout_by_season",
+            "pool_size": pool_size,
+            "holdout_seasons_per_pool": holdout_seasons_per_pool,
+            "random_seed": random_seed,
+            "season_pools": full_pools,
+            "training_seasons": sorted({int(row["season"]) for row in train}),
+            "holdout_seasons": holdout,
+            "training_rows": len(train),
+            "holdout_rows": len(test),
+        },
+    )
+
+
+def _evaluate_split(
+    train: list[dict[str, object]],
+    test: list[dict[str, object]],
+    model_factory: Callable[[], RiskModel],
+    *,
+    model_name: str,
+    split: dict[str, object],
+    comparison_model_factories: dict[str, Callable[[], RiskModel]] | None = None,
+) -> dict[str, object]:
+    if not train or not test:
+        return {"status": "skipped", "reason": "Training and holdout rows are required for evaluation."}
+
     model = model_factory().fit(train)
     scorers: dict[str, RiskScorer] = {model_name: model.predict_risk}
     for comparison_name, comparison_factory in (comparison_model_factories or {}).items():
@@ -75,11 +171,7 @@ def evaluate_chronological(
     return {
         "status": "ok",
         "split": {
-            "strategy": "chronological_holdout_by_season",
-            "training_seasons": sorted({int(row["season"]) for row in train}),
-            "holdout_seasons": holdout,
-            "training_rows": len(train),
-            "holdout_rows": len(test),
+            **split,
             "evaluated_events": primary["events"],
             "evaluated_candidates": primary["candidates"],
         },
@@ -98,7 +190,7 @@ def evaluate_chronological(
             "The historical-rate baseline should remain the default unless a candidate model lowers both holdout log loss and Brier score.",
         ],
         # Backward-compatible summary aliases for older dashboard/API readers.
-        "holdout_seasons": holdout,
+        "holdout_seasons": split["holdout_seasons"],
         "events": primary["events"],
         "top1_accuracy": primary_metrics["ranking"]["top1_accuracy"],
         "top3_recall": primary_metrics["ranking"]["top3_recall"],
@@ -122,6 +214,21 @@ def assert_chronological_split(
         raise ValueError(f"Chronological split leakage: seasons appear in both train and holdout: {overlapping}")
     if max(train_seasons) >= min(test_seasons):
         raise ValueError("Chronological split leakage: training seasons must all precede holdout seasons.")
+
+
+def assert_disjoint_season_split(
+    train_rows: list[dict[str, object]],
+    test_rows: list[dict[str, object]],
+) -> None:
+    """Raise when training and holdout rows contain any overlapping season."""
+
+    if not train_rows or not test_rows:
+        return
+    train_seasons = {int(row["season"]) for row in train_rows}
+    test_seasons = {int(row["season"]) for row in test_rows}
+    overlapping = sorted(train_seasons.intersection(test_seasons))
+    if overlapping:
+        raise ValueError(f"Season split leakage: seasons appear in both train and holdout: {overlapping}")
 
 
 def _group_events(rows: list[dict[str, object]]) -> dict[tuple[int, int, int], list[dict[str, object]]]:

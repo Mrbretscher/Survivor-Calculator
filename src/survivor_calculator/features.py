@@ -108,6 +108,7 @@ def build_features(tables: dict[str, list[dict[str, str | None]]]) -> FeatureBui
 
     state_rows = [row for row in boot_mapping if row.get("game_status") == "In the game"]
     state_keys = _state_keys(state_rows)
+    original_tribes = _original_tribes(state_rows)
     challenge_wins = _carry_forward_values(challenge_wins, state_keys)
     immunity_wins = _carry_forward_values(immunity_wins, state_keys)
     votes_received = _carry_forward_values(votes_received, state_keys)
@@ -151,9 +152,17 @@ def build_features(tables: dict[str, list[dict[str, str | None]]]) -> FeatureBui
             "age": to_int(castaway.get("age")),
             "gender": detail.get("gender") or "Unknown",
             "occupation": occupation,
+            "soc_code": soc.soc_code if soc else "",
+            "soc_title": soc.soc_title if soc else "",
             "soc_major_group": soc.soc_major_group if soc else "",
             "tribe": state.get("tribe") or "",
+            "original_tribe": original_tribes.get((season, castaway_id), state.get("tribe") or ""),
             "tribe_status": state.get("tribe_status") or "",
+            "tribe_status_display": _tribe_status_display(
+                state.get("tribe_status") or "",
+                original_tribes.get((season, castaway_id), state.get("tribe") or ""),
+                state.get("tribe") or "",
+            ),
             "tribe_size": tribe_sizes.get((season, episode, state.get("tribe") or ""), 0),
             "challenge_wins_to_date": challenge_wins.get((season, castaway_id, episode), 0),
             "individual_immunity_wins_to_date": immunity_wins.get((season, castaway_id, episode), 0),
@@ -282,6 +291,31 @@ def _tribe_sizes(rows: list[dict[str, str | None]]) -> dict[tuple[int, int, str]
             continue
         sizes[(season, episode, tribe)] += 1
     return dict(sizes)
+
+
+def _original_tribes(rows: list[dict[str, str | None]]) -> dict[tuple[int, str], str]:
+    originals: dict[tuple[int, str], tuple[int, int, str]] = {}
+    for row in rows:
+        season = to_int(row.get("season"))
+        episode = to_int(row.get("episode"))
+        n_boots = to_int(row.get("n_boots"))
+        castaway_id = row.get("castaway_id")
+        tribe = row.get("tribe") or ""
+        if season is None or episode is None or n_boots is None or not castaway_id or not tribe:
+            continue
+        key = (season, castaway_id)
+        candidate = (episode, n_boots, tribe)
+        if key not in originals or candidate[:2] < originals[key][:2]:
+            originals[key] = candidate
+    return {key: value[2] for key, value in originals.items()}
+
+
+def _tribe_status_display(source_status: str, original_tribe: str, current_tribe: str) -> str:
+    if source_status.lower().startswith("merge"):
+        return "Merged"
+    if original_tribe and current_tribe and original_tribe != current_tribe:
+        return "Swapped"
+    return "Original"
 
 
 def _state_keys(rows: list[dict[str, str | None]]) -> dict[tuple[int, str], list[int]]:

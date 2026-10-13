@@ -125,7 +125,7 @@ Because these outputs contain transformed source data, treat them as subject to 
 
 ## SOC Mapping
 
-The SOC layer uses the [2018 U.S. Bureau of Labor Statistics Standard Occupational Classification](https://www.bls.gov/soc/2018/home.htm) structure as a target taxonomy. The current implementation is deterministic keyword mapping with review flags. It is a convenience feature for grouping occupations, not a verified labor-statistics classification.
+The SOC layer uses the [2023 BLS OEWS occupation structure](https://www.bls.gov/oes/2023/may/oes_stru.htm) as a target taxonomy. The current implementation is deterministic keyword mapping with review flags. It assigns detailed occupation codes and titles where possible, plus a project-specific `Students` major group for contestant descriptions that are education statuses rather than labor-market jobs.
 
 Public reporting should preserve the `review_required`, `confidence`, and `notes` fields from `data/processed/soc_mapping.csv`, and should not present unmapped or keyword-mapped occupations as manually validated SOC assignments.
 

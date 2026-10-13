@@ -42,6 +42,30 @@ class FeatureBuildTests(unittest.TestCase):
         self.assertEqual(current_by_id["S2-D"]["votes_cast_to_date"], 1)
         self.assertEqual(current_by_id["S2-D"]["advantages_held_to_date"], 1)
 
+    def test_feature_build_derives_player_facing_tribe_status(self) -> None:
+        current_by_id = {row["castaway_id"]: row for row in self.features.current_rows}
+
+        self.assertEqual(current_by_id["S2-C"]["original_tribe"], "Luma")
+        self.assertEqual(current_by_id["S2-C"]["tribe"], "Luma")
+        self.assertEqual(current_by_id["S2-C"]["tribe_status_display"], "Original")
+        self.assertEqual(current_by_id["S2-D"]["original_tribe"], "Luma")
+        self.assertEqual(current_by_id["S2-D"]["tribe"], "Koru")
+        self.assertEqual(current_by_id["S2-D"]["tribe_status_display"], "Swapped")
+
+    def test_feature_build_marks_every_current_player_merged_after_merge(self) -> None:
+        tables = minimal_core_tables()
+        for row in tables["Boot Mapping"]:
+            if row["season"] == "2" and row["episode"] == "2":
+                row["tribe"] = "Merged Tribe"
+                row["tribe_status"] = "Merged"
+
+        features = build_features(tables)
+
+        self.assertEqual(
+            {row["tribe_status_display"] for row in features.current_rows},
+            {"Merged"},
+        )
+
     def test_feature_columns_do_not_include_known_leakage_targets(self) -> None:
         assert_no_leakage_columns(FEATURE_COLUMNS)
 
@@ -56,6 +80,16 @@ class FeatureBuildTests(unittest.TestCase):
         }
 
         self.assertEqual(len(self.features.soc_mappings), len(occupations))
+
+    def test_feature_build_includes_detailed_soc_fields(self) -> None:
+        current_by_id = {row["castaway_id"]: row for row in self.features.current_rows}
+
+        self.assertEqual(current_by_id["S2-C"]["soc_code"], "29-1141")
+        self.assertEqual(current_by_id["S2-C"]["soc_title"], "Registered Nurses")
+        self.assertEqual(
+            current_by_id["S2-C"]["soc_major_group"],
+            "Healthcare Practitioners and Technical Occupations",
+        )
 
 
 @unittest.skipUnless(WORKBOOK.exists(), "Integration coverage requires survivoR.xlsx")

@@ -22,6 +22,10 @@ class PredictionTests(unittest.TestCase):
         self.assertEqual(len(payload["players"]), 2)
         self.assertEqual(len(payload["projected_boot_order"]), 2)
         self.assertEqual(payload["evaluation"]["status"], "skipped")
+        self.assertIn("original_tribe", payload["players"][0])
+        self.assertIn("tribe_status_display", payload["players"][0])
+        self.assertIn("soc_code", payload["players"][0])
+        self.assertIn("soc_title", payload["players"][0])
         self.assertTrue(all(0.0 < player["next_boot_probability"] < 1.0 for player in payload["players"]))
         winner_total = sum(player["winner_probability"] for player in payload["players"])
         self.assertAlmostEqual(winner_total, 1.0, places=6)
@@ -29,6 +33,8 @@ class PredictionTests(unittest.TestCase):
     def test_model_name_aliases_keep_baseline_default_readable(self) -> None:
         self.assertEqual(resolve_model_name("historical-rate-baseline"), "historical_rate_baseline")
         self.assertEqual(resolve_model_name("experimental-next-boot"), "experimental_next_boot")
+        self.assertEqual(resolve_model_name("occupation-text-next-boot"), "occupation_text_next_boot")
+        self.assertEqual(resolve_model_name("hybrid-model"), "hybrid_next_boot")
 
     def test_experimental_model_reports_missing_optional_dependency(self) -> None:
         try:

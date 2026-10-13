@@ -2,8 +2,12 @@ type Player = {
   castaway_id: string;
   castaway: string;
   tribe: string;
+  original_tribe: string;
   tribe_status: string;
+  tribe_status_display: string;
   occupation: string;
+  soc_code: string;
+  soc_title: string;
   soc_major_group: string;
   raw_next_boot_risk: number;
   next_boot_probability: number;
@@ -127,16 +131,26 @@ export default async function Home() {
               </div>
               <dl className="playerMeta">
                 <div>
-                  <dt>Status</dt>
-                  <dd>{player.tribe_status}</dd>
+                  <dt>Tribe status</dt>
+                  <dd>{player.tribe_status_display}</dd>
                 </div>
+                {player.tribe_status_display === "Swapped" ? (
+                  <div>
+                    <dt>Original tribe</dt>
+                    <dd>{player.original_tribe}</dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt>Occupation</dt>
                   <dd>{player.occupation || "Under review"}</dd>
                 </div>
                 <div>
-                  <dt>SOC group</dt>
-                  <dd>{player.soc_major_group || "Unmapped"}</dd>
+                  <dt>SOC title</dt>
+                  <dd>{formatSocTitle(player)}</dd>
+                </div>
+                <div>
+                  <dt>SOC major group</dt>
+                  <dd>{player.soc_major_group || "Manual review"}</dd>
                 </div>
               </dl>
               <div className="metricsRow">
@@ -466,4 +480,11 @@ function formatDateTime(value: string): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(date);
+}
+
+function formatSocTitle(player: Player): string {
+  if (!player.soc_title) {
+    return "Manual review";
+  }
+  return player.soc_code ? `${player.soc_title} (${player.soc_code})` : player.soc_title;
 }

@@ -1,7 +1,12 @@
 import unittest
 
 from survivor_calculator.baseline import HistoricalRateModel
-from survivor_calculator.evaluation import PRIMARY_MODEL_NAME, assert_chronological_split, evaluate_chronological
+from survivor_calculator.evaluation import (
+    PRIMARY_MODEL_NAME,
+    assert_chronological_split,
+    evaluate_chronological,
+    evaluate_pooled_random_holdout,
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -43,6 +48,25 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(evaluation["primary_model"], "constant_test_model")
         self.assertEqual(evaluation["probability_quality"]["reference_model"], "historical_rate_baseline")
         self.assertIn("brier_score_delta_vs_baseline", evaluation["probability_quality"])
+
+    def test_pooled_random_holdout_uses_seeded_validation_seasons(self) -> None:
+        rows = _evaluation_rows(seasons=10)
+
+        evaluation = evaluate_pooled_random_holdout(
+            rows,
+            HistoricalRateModel,
+            pool_size=5,
+            holdout_seasons_per_pool=1,
+            random_seed=42,
+        )
+
+        self.assertEqual(evaluation["status"], "ok")
+        self.assertEqual(evaluation["split"]["strategy"], "pooled_random_holdout_by_season")
+        self.assertEqual(evaluation["split"]["season_pools"], [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
+        self.assertEqual(evaluation["split"]["holdout_seasons"], [1, 6])
+        self.assertEqual(evaluation["split"]["training_seasons"], [2, 3, 4, 5, 7, 8, 9, 10])
+        self.assertEqual(evaluation["metrics"]["event_count"], 2)
+        self.assertEqual(evaluation["top1_accuracy"], 1.0)
 
     def test_chronological_evaluation_skips_when_holdout_would_consume_all_seasons(self) -> None:
         evaluation = evaluate_chronological(_evaluation_rows(seasons=2), HistoricalRateModel, holdout_seasons=2)

@@ -41,6 +41,12 @@ def main(argv: list[str] | None = None) -> int:
         default="historical-rate-baseline",
         help="Prediction model to use. The historical-rate baseline remains the default.",
     )
+    build_parser.add_argument(
+        "--evaluation-strategy",
+        choices=("pooled-random", "chronological"),
+        default="pooled-random",
+        help="Validation strategy to report in prediction metadata.",
+    )
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Build static dashboard HTML")
     dashboard_parser.add_argument("--predictions", default=str(DEFAULT_PREDICTIONS))
@@ -55,7 +61,12 @@ def main(argv: list[str] | None = None) -> int:
         return _inspect(Path(args.workbook))
     if args.command == "build":
         try:
-            return _build(Path(args.workbook), Path(args.output_dir), resolve_model_name(args.model))
+            return _build(
+                Path(args.workbook),
+                Path(args.output_dir),
+                resolve_model_name(args.model),
+                args.evaluation_strategy,
+            )
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
@@ -78,7 +89,7 @@ def _inspect(workbook: Path) -> int:
     return 0
 
 
-def _build(workbook: Path, output_dir: Path, model_name: str) -> int:
+def _build(workbook: Path, output_dir: Path, model_name: str, evaluation_strategy: str) -> int:
     validate_model_available(model_name)
     with WorkbookReader(workbook) as reader:
         exported = reader.export_csvs(output_dir / "tables", CORE_SHEETS)
@@ -89,7 +100,12 @@ def _build(workbook: Path, output_dir: Path, model_name: str) -> int:
     _write_feature_rows(features.historical_rows, output_dir / "historical_episode_states.csv")
     _write_feature_rows(features.current_rows, output_dir / "current_episode_state.csv")
     soc_path = export_soc_mapping(features.soc_mappings, output_dir / "soc_mapping.csv")
-    predictions = build_predictions(features, workbook, model_name=model_name)
+    predictions = build_predictions(
+        features,
+        workbook,
+        model_name=model_name,
+        evaluation_strategy=evaluation_strategy,
+    )
     predictions_path = save_predictions(predictions, output_dir / "current_predictions.json")
     dashboard_path = build_dashboard(predictions_path, output_dir / "dashboard.html")
 
@@ -97,6 +113,7 @@ def _build(workbook: Path, output_dir: Path, model_name: str) -> int:
     print(f"Latest episode: {features.latest_episode}")
     print(f"Active players: {len(features.current_rows)}")
     print(f"Model: {model_name}")
+    print(f"Evaluation strategy: {evaluation_strategy}")
     print(f"Wrote SOC mapping: {soc_path}")
     print(f"Wrote predictions: {predictions_path}")
     print(f"Wrote dashboard: {dashboard_path}")

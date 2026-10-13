@@ -11,16 +11,26 @@ from statistics import mean
 from typing import Callable
 
 from survivor_calculator.evaluation import evaluate_chronological as _evaluate_chronological
+from survivor_calculator.evaluation import evaluate_pooled_random_holdout as _evaluate_pooled_random_holdout
 from survivor_calculator.evaluation import PRIMARY_MODEL_NAME, RiskModel
 from survivor_calculator.features import FEATURE_COLUMNS, FeatureBuildResult, assert_no_leakage_columns
 
 EXPERIMENTAL_MODEL_NAME = "experimental_next_boot"
+OCCUPATION_TEXT_MODEL_NAME = "occupation_text_next_boot"
+HYBRID_MODEL_NAME = "hybrid_next_boot"
+DEFAULT_HYBRID_NON_OCCUPATION_WEIGHT = 0.9
 MODEL_NAME_ALIASES = {
     PRIMARY_MODEL_NAME: PRIMARY_MODEL_NAME,
     "historical-rate-baseline": PRIMARY_MODEL_NAME,
     "historical-rate": PRIMARY_MODEL_NAME,
     EXPERIMENTAL_MODEL_NAME: EXPERIMENTAL_MODEL_NAME,
     "experimental-next-boot": EXPERIMENTAL_MODEL_NAME,
+    OCCUPATION_TEXT_MODEL_NAME: OCCUPATION_TEXT_MODEL_NAME,
+    "occupation-text-next-boot": OCCUPATION_TEXT_MODEL_NAME,
+    "occupation-sklearn-next-boot": OCCUPATION_TEXT_MODEL_NAME,
+    HYBRID_MODEL_NAME: HYBRID_MODEL_NAME,
+    "hybrid-next-boot": HYBRID_MODEL_NAME,
+    "hybrid-model": HYBRID_MODEL_NAME,
 }
 
 
@@ -104,10 +114,39 @@ class HistoricalRateModel:
         }
 
 
+class HybridNextBootModel:
+    """Blend the historical-rate and occupation-text next-boot risk models."""
+
+    def __init__(self, non_occupation_weight: float = DEFAULT_HYBRID_NON_OCCUPATION_WEIGHT) -> None:
+        if not 0.0 <= non_occupation_weight <= 1.0:
+            raise ValueError("non_occupation_weight must be between 0.0 and 1.0.")
+        from survivor_calculator.experimental import OccupationTextNextBootModel
+
+        self.non_occupation_weight = non_occupation_weight
+        self.non_occupation_model = HistoricalRateModel()
+        self.occupation_model = OccupationTextNextBootModel()
+
+    def fit(self, rows: list[dict[str, object]]) -> "HybridNextBootModel":
+        self.non_occupation_model.fit(rows)
+        self.occupation_model.fit(rows)
+        return self
+
+    def predict_risk(self, row: dict[str, object]) -> float:
+        non_occupation_risk = self.non_occupation_model.predict_risk(row)
+        occupation_risk = self.occupation_model.predict_risk(row)
+        occupation_weight = 1.0 - self.non_occupation_weight
+        blended_risk = (
+            self.non_occupation_weight * non_occupation_risk
+            + occupation_weight * occupation_risk
+        )
+        return min(max(blended_risk, 0.001), 0.999)
+
+
 def build_predictions(
     features: FeatureBuildResult,
     workbook_path: str | Path,
     model_name: str = PRIMARY_MODEL_NAME,
+    evaluation_strategy: str = "pooled-random",
 ) -> PredictionBundle:
     assert_no_leakage_columns(FEATURE_COLUMNS)
     resolved_model_name = resolve_model_name(model_name)
@@ -122,10 +161,11 @@ def build_predictions(
         if resolved_model_name != PRIMARY_MODEL_NAME
         else None
     )
-    evaluation = _evaluate_chronological(
+    evaluation = _evaluate_model(
         features.historical_rows,
         model_factory,
         model_name=resolved_model_name,
+        evaluation_strategy=evaluation_strategy,
         comparison_model_factories=comparison_factories,
     )
 
@@ -137,8 +177,12 @@ def build_predictions(
                 "castaway_id": row["castaway_id"],
                 "castaway": row["castaway"],
                 "tribe": row["tribe"],
+                "original_tribe": row["original_tribe"],
                 "tribe_status": row["tribe_status"],
+                "tribe_status_display": row["tribe_status_display"],
                 "occupation": row["occupation"],
+                "soc_code": row["soc_code"],
+                "soc_title": row["soc_title"],
                 "soc_major_group": row["soc_major_group"] or "Unmapped",
                 "raw_next_boot_risk": raw_risk,
                 "next_boot_probability": 0.0,
@@ -161,6 +205,8 @@ def build_predictions(
     metadata = {
         "generated_at": datetime.now(UTC).isoformat(),
         "model_name": resolved_model_name,
+        "model_parameters": _model_parameters(resolved_model_name),
+        "evaluation_strategy": evaluation_strategy,
         "model_selection_policy": (
             "historical_rate_baseline remains the default; use experimental_next_boot "
             "only when chronological holdout log loss and Brier score both improve."
@@ -179,6 +225,12 @@ def evaluate_chronological(rows: list[dict[str, object]], holdout_seasons: int =
     """Evaluate the historical-rate baseline with a chronological holdout split."""
 
     return _evaluate_chronological(rows, HistoricalRateModel, holdout_seasons)
+
+
+def evaluate_pooled_random_holdout(rows: list[dict[str, object]]) -> dict[str, object]:
+    """Evaluate the historical-rate baseline with the pooled random 80/20 split."""
+
+    return _evaluate_pooled_random_holdout(rows, HistoricalRateModel)
 
 
 def resolve_model_name(model_name: str) -> str:
@@ -202,6 +254,40 @@ def save_predictions(bundle: PredictionBundle, output_path: str | Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(bundle.to_dict(), indent=2), encoding="utf-8")
     return path
+
+
+def _evaluate_model(
+    rows: list[dict[str, object]],
+    model_factory: Callable[[], RiskModel],
+    *,
+    model_name: str,
+    evaluation_strategy: str,
+    comparison_model_factories: dict[str, Callable[[], RiskModel]] | None = None,
+) -> dict[str, object]:
+    if evaluation_strategy == "pooled-random":
+        return _evaluate_pooled_random_holdout(
+            rows,
+            model_factory,
+            model_name=model_name,
+            comparison_model_factories=comparison_model_factories,
+        )
+    if evaluation_strategy == "chronological":
+        return _evaluate_chronological(
+            rows,
+            model_factory,
+            model_name=model_name,
+            comparison_model_factories=comparison_model_factories,
+        )
+    raise ValueError("evaluation_strategy must be 'pooled-random' or 'chronological'.")
+
+
+def _model_parameters(model_name: str) -> dict[str, object]:
+    if model_name == HYBRID_MODEL_NAME:
+        return {
+            "non_occupation_weight": DEFAULT_HYBRID_NON_OCCUPATION_WEIGHT,
+            "occupation_weight": 1.0 - DEFAULT_HYBRID_NON_OCCUPATION_WEIGHT,
+        }
+    return {}
 
 
 def _project_boot_order(players: list[dict[str, object]], latest_final_n: int) -> list[dict[str, object]]:
@@ -229,11 +315,24 @@ def _model_factory(model_name: str) -> Callable[[], RiskModel]:
         from survivor_calculator.experimental import ExperimentalNextBootModel
 
         return ExperimentalNextBootModel
+    if model_name == OCCUPATION_TEXT_MODEL_NAME:
+        from survivor_calculator.experimental import OccupationTextNextBootModel
+
+        return OccupationTextNextBootModel
+    if model_name == HYBRID_MODEL_NAME:
+        return HybridNextBootModel
     raise ValueError(f"Unknown model: {model_name}")
 
 
 def _explain(row: dict[str, object], risk: float, model_name: str) -> list[str]:
-    label = "Experimental model" if model_name == EXPERIMENTAL_MODEL_NAME else "Baseline"
+    if model_name == EXPERIMENTAL_MODEL_NAME:
+        label = "Experimental model"
+    elif model_name == OCCUPATION_TEXT_MODEL_NAME:
+        label = "Occupation text model"
+    elif model_name == HYBRID_MODEL_NAME:
+        label = "Hybrid model"
+    else:
+        label = "Baseline"
     reasons = [f"{label} next-boot risk: {risk:.1%}."]
     if float(row.get("votes_received_to_date") or 0) > 0:
         reasons.append("Has received votes earlier in the season.")

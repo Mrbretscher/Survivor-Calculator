@@ -61,8 +61,12 @@ class PlayerResponse(BaseModel):  # type: ignore[misc]
     castaway_id: str
     castaway: str
     tribe: str
+    original_tribe: str
     tribe_status: str
+    tribe_status_display: str
     occupation: str
+    soc_code: str
+    soc_title: str
     soc_major_group: str
     raw_next_boot_risk: float
     next_boot_probability: float
@@ -209,8 +213,12 @@ def _validate_player(value: object, field: str) -> dict[str, object]:
         "castaway_id": _required_string(player, "castaway_id"),
         "castaway": _required_string(player, "castaway"),
         "tribe": _required_string(player, "tribe"),
+        "original_tribe": _required_string(player, "original_tribe"),
         "tribe_status": _required_string(player, "tribe_status"),
+        "tribe_status_display": _required_string(player, "tribe_status_display"),
         "occupation": _required_string(player, "occupation"),
+        "soc_code": _required_string(player, "soc_code"),
+        "soc_title": _required_string(player, "soc_title"),
         "soc_major_group": _required_string(player, "soc_major_group"),
         "raw_next_boot_risk": _required_float(player, "raw_next_boot_risk"),
         "next_boot_probability": _required_probability(player, "next_boot_probability"),

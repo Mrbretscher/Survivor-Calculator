@@ -67,6 +67,10 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(len(payload["projected_boot_order"]), 2)
         self.assertEqual(payload["evaluation"]["status"], "skipped")
         self.assertIn("next_boot_probability", payload["players"][0])
+        self.assertIn("original_tribe", payload["players"][0])
+        self.assertIn("tribe_status_display", payload["players"][0])
+        self.assertIn("soc_code", payload["players"][0])
+        self.assertIn("soc_title", payload["players"][0])
         self.assertIn("projected_boot_probability", payload["projected_boot_order"][0])
 
     def test_missing_predictions_file_returns_clear_sanitized_error(self) -> None:
