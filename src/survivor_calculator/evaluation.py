@@ -29,6 +29,8 @@ def evaluate_chronological(
     rows: list[dict[str, object]],
     model_factory: Callable[[], RiskModel],
     holdout_seasons: int = 5,
+    model_name: str = PRIMARY_MODEL_NAME,
+    comparison_model_factories: dict[str, Callable[[], RiskModel]] | None = None,
 ) -> dict[str, object]:
     """Evaluate boot-risk scoring on the latest completed seasons only.
 
@@ -49,11 +51,17 @@ def evaluate_chronological(
     assert_chronological_split(train, test)
 
     model = model_factory().fit(train)
-    scorers: dict[str, RiskScorer] = {
-        PRIMARY_MODEL_NAME: model.predict_risk,
-        "uniform_random": lambda _row: 1.0,
-        "prior_votes_heuristic": lambda row: 1.0 + _to_float(row.get("votes_received_to_date")),
-    }
+    scorers: dict[str, RiskScorer] = {model_name: model.predict_risk}
+    for comparison_name, comparison_factory in (comparison_model_factories or {}).items():
+        if comparison_name == model_name:
+            continue
+        scorers[comparison_name] = comparison_factory().fit(train).predict_risk
+    scorers.update(
+        {
+            "uniform_random": lambda _row: 1.0,
+            "prior_votes_heuristic": lambda row: 1.0 + _to_float(row.get("votes_received_to_date")),
+        }
+    )
 
     event_groups = _group_events(test)
     results = [_score_events(name, scorer, event_groups) for name, scorer in scorers.items()]
@@ -63,6 +71,7 @@ def evaluate_chronological(
 
     calibration = _calibration_summary(primary["predictions"])
     primary_metrics = _metric_sections(primary)
+    probability_quality = _probability_quality_summary(primary, results)
     return {
         "status": "ok",
         "split": {
@@ -74,17 +83,19 @@ def evaluate_chronological(
             "evaluated_events": primary["events"],
             "evaluated_candidates": primary["candidates"],
         },
-        "primary_model": PRIMARY_MODEL_NAME,
+        "primary_model": model_name,
         "metrics": primary_metrics,
         "baseline_comparisons": [_comparison_row(result) for result in results],
+        "probability_quality": probability_quality,
         "calibration": {
-            "model": PRIMARY_MODEL_NAME,
+            "model": model_name,
             **calibration,
         },
         "notes": [
             "Top-k metrics are event-level ranking metrics.",
             "Brier score and calibration are candidate-level probability checks after event-level normalization.",
             "Log loss is the event-level negative log probability assigned to the actual boot.",
+            "The historical-rate baseline should remain the default unless a candidate model lowers both holdout log loss and Brier score.",
         ],
         # Backward-compatible summary aliases for older dashboard/API readers.
         "holdout_seasons": holdout,
@@ -209,6 +220,46 @@ def _comparison_row(result: dict[str, object]) -> dict[str, object]:
         "brier_score": result["brier_score"],
         "log_loss": result["log_loss"],
         "mean_actual_probability": result["mean_actual_probability"],
+    }
+
+
+def _probability_quality_summary(
+    primary: dict[str, object],
+    results: list[dict[str, object]],
+) -> dict[str, object]:
+    baseline = next((result for result in results if result["name"] == PRIMARY_MODEL_NAME), None)
+    if baseline is None or primary["name"] == PRIMARY_MODEL_NAME:
+        return {
+            "reference_model": PRIMARY_MODEL_NAME,
+            "candidate_model": primary["name"],
+            "recommendation": "baseline_default",
+            "reason": "The historical-rate baseline is the primary model.",
+        }
+
+    primary_log_loss = primary["log_loss"]
+    baseline_log_loss = baseline["log_loss"]
+    primary_brier = primary["brier_score"]
+    baseline_brier = baseline["brier_score"]
+    if None in (primary_log_loss, baseline_log_loss, primary_brier, baseline_brier):
+        return {
+            "reference_model": PRIMARY_MODEL_NAME,
+            "candidate_model": primary["name"],
+            "recommendation": "keep_baseline_default",
+            "reason": "Probability metrics were unavailable for at least one compared model.",
+        }
+
+    log_loss_delta = float(primary_log_loss) - float(baseline_log_loss)
+    brier_delta = float(primary_brier) - float(baseline_brier)
+    improves_probability_quality = log_loss_delta < 0 and brier_delta < 0
+    return {
+        "reference_model": PRIMARY_MODEL_NAME,
+        "candidate_model": primary["name"],
+        "log_loss_delta_vs_baseline": log_loss_delta,
+        "brier_score_delta_vs_baseline": brier_delta,
+        "improves_probability_quality": improves_probability_quality,
+        "recommendation": "experimental_probability_quality_improved"
+        if improves_probability_quality
+        else "keep_baseline_default",
     }
 
 

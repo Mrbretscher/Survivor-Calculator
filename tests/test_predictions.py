@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-from survivor_calculator.baseline import build_predictions
+from survivor_calculator.baseline import build_predictions, resolve_model_name
 from survivor_calculator.features import build_features
 from survivor_calculator.ingest import load_core_tables
 
@@ -25,6 +25,20 @@ class PredictionTests(unittest.TestCase):
         self.assertTrue(all(0.0 < player["next_boot_probability"] < 1.0 for player in payload["players"]))
         winner_total = sum(player["winner_probability"] for player in payload["players"])
         self.assertAlmostEqual(winner_total, 1.0, places=6)
+
+    def test_model_name_aliases_keep_baseline_default_readable(self) -> None:
+        self.assertEqual(resolve_model_name("historical-rate-baseline"), "historical_rate_baseline")
+        self.assertEqual(resolve_model_name("experimental-next-boot"), "experimental_next_boot")
+
+    def test_experimental_model_reports_missing_optional_dependency(self) -> None:
+        try:
+            import sklearn  # noqa: F401
+        except ModuleNotFoundError:
+            features = build_features(minimal_core_tables())
+            with self.assertRaisesRegex(RuntimeError, "requires scikit-learn"):
+                build_predictions(features, Path("fixture.xlsx"), model_name="experimental-next-boot")
+        else:
+            self.skipTest("scikit-learn is installed; missing-optional-dependency path is not active")
 
 
 @unittest.skipUnless(WORKBOOK.exists(), "Integration coverage requires survivoR.xlsx")

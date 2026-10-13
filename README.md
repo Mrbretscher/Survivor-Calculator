@@ -11,6 +11,7 @@ This is not production-grade forecasting. Survivor is noisy, sample sizes are sm
 - Episode-state feature generation for historical training rows and current-season inference rows.
 - Leakage guard for known target and future outcome columns.
 - Historical-rate baseline for next-boot probability, winner probability, and projected remaining boot order.
+- Optional experimental scikit-learn next-boot model behind an explicit CLI flag.
 - SOC occupation mapping coverage: each distinct occupation is mapped by keyword or marked for review.
 - Static local dashboard HTML generated from the latest prediction output.
 - Optional FastAPI app and Next.js frontend scaffold.
@@ -27,6 +28,16 @@ python -m unittest discover -s tests
 ```
 
 Generated files are written under `data/processed/` and are ignored by Git.
+
+The build command defaults to the dependency-light historical-rate baseline. To try the experimental scikit-learn model, install the optional ML extras in your project environment and opt in:
+
+```powershell
+pip install -e ".[ml]"
+$env:PYTHONPATH = "src"
+python -m survivor_calculator.cli build --workbook survivoR.xlsx --model experimental-next-boot
+```
+
+Each prediction output includes chronological holdout evaluation with log loss, Brier score, top-1 accuracy, and top-3 recall. When the experimental model is selected, the evaluation also compares it with `historical_rate_baseline`. Keep the baseline as the default unless the experimental model lowers both holdout log loss and Brier score.
 
 ## Local API
 
@@ -145,6 +156,9 @@ Fixture-based tests run without the workbook. Integration tests that inspect the
 ## Limitations
 
 - Baseline probabilities are historical-rate estimates, not calibrated production forecasts.
+- The experimental next-boot model is opt-in only. It uses a regularized logistic model on engineered episode-state features and has not shown enough evidence here to replace the baseline by default.
+- Chronological holdout seasons are small, and Survivor boot outcomes are sparse; log loss and Brier score are more relevant for probability quality than a single top-k ranking result.
+- The model predicts next-boot risk independently before event-level normalization, so it does not understand alliances, episode narrative, edits not present in the workbook, idols played after the current state, or production context.
 - The current model is intentionally simple and does not establish causal effects.
 - Current-season outputs depend on the local workbook being up to date.
 - SOC mapping is deterministic and incomplete; ambiguous occupations require manual review.

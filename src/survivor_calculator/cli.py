@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
-from survivor_calculator.baseline import build_predictions, save_predictions
+from survivor_calculator.baseline import (
+    MODEL_NAME_ALIASES,
+    build_predictions,
+    resolve_model_name,
+    save_predictions,
+    validate_model_available,
+)
 from survivor_calculator.dashboard import build_dashboard
 from survivor_calculator.features import build_features
 from survivor_calculator.ingest import CORE_SHEETS, WorkbookReader, load_core_tables
@@ -28,6 +35,12 @@ def main(argv: list[str] | None = None) -> int:
     build_parser = subparsers.add_parser("build", help="Build clean tables and predictions")
     build_parser.add_argument("--workbook", default=str(DEFAULT_WORKBOOK))
     build_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    build_parser.add_argument(
+        "--model",
+        choices=sorted(MODEL_NAME_ALIASES),
+        default="historical-rate-baseline",
+        help="Prediction model to use. The historical-rate baseline remains the default.",
+    )
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Build static dashboard HTML")
     dashboard_parser.add_argument("--predictions", default=str(DEFAULT_PREDICTIONS))
@@ -41,7 +54,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "inspect":
         return _inspect(Path(args.workbook))
     if args.command == "build":
-        return _build(Path(args.workbook), Path(args.output_dir))
+        try:
+            return _build(Path(args.workbook), Path(args.output_dir), resolve_model_name(args.model))
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     if args.command == "dashboard":
         output = build_dashboard(args.predictions, args.output)
         print(f"Wrote dashboard: {output}")
@@ -61,7 +78,8 @@ def _inspect(workbook: Path) -> int:
     return 0
 
 
-def _build(workbook: Path, output_dir: Path) -> int:
+def _build(workbook: Path, output_dir: Path, model_name: str) -> int:
+    validate_model_available(model_name)
     with WorkbookReader(workbook) as reader:
         exported = reader.export_csvs(output_dir / "tables", CORE_SHEETS)
     print(f"Exported {len(exported)} clean CSV tables.")
@@ -71,13 +89,14 @@ def _build(workbook: Path, output_dir: Path) -> int:
     _write_feature_rows(features.historical_rows, output_dir / "historical_episode_states.csv")
     _write_feature_rows(features.current_rows, output_dir / "current_episode_state.csv")
     soc_path = export_soc_mapping(features.soc_mappings, output_dir / "soc_mapping.csv")
-    predictions = build_predictions(features, workbook)
+    predictions = build_predictions(features, workbook, model_name=model_name)
     predictions_path = save_predictions(predictions, output_dir / "current_predictions.json")
     dashboard_path = build_dashboard(predictions_path, output_dir / "dashboard.html")
 
     print(f"Current season: {features.current_season}")
     print(f"Latest episode: {features.latest_episode}")
     print(f"Active players: {len(features.current_rows)}")
+    print(f"Model: {model_name}")
     print(f"Wrote SOC mapping: {soc_path}")
     print(f"Wrote predictions: {predictions_path}")
     print(f"Wrote dashboard: {dashboard_path}")

@@ -8,9 +8,20 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
+from typing import Callable
 
 from survivor_calculator.evaluation import evaluate_chronological as _evaluate_chronological
+from survivor_calculator.evaluation import PRIMARY_MODEL_NAME, RiskModel
 from survivor_calculator.features import FEATURE_COLUMNS, FeatureBuildResult, assert_no_leakage_columns
+
+EXPERIMENTAL_MODEL_NAME = "experimental_next_boot"
+MODEL_NAME_ALIASES = {
+    PRIMARY_MODEL_NAME: PRIMARY_MODEL_NAME,
+    "historical-rate-baseline": PRIMARY_MODEL_NAME,
+    "historical-rate": PRIMARY_MODEL_NAME,
+    EXPERIMENTAL_MODEL_NAME: EXPERIMENTAL_MODEL_NAME,
+    "experimental-next-boot": EXPERIMENTAL_MODEL_NAME,
+}
 
 
 @dataclass(frozen=True)
@@ -93,14 +104,30 @@ class HistoricalRateModel:
         }
 
 
-def build_predictions(features: FeatureBuildResult, workbook_path: str | Path) -> PredictionBundle:
+def build_predictions(
+    features: FeatureBuildResult,
+    workbook_path: str | Path,
+    model_name: str = PRIMARY_MODEL_NAME,
+) -> PredictionBundle:
     assert_no_leakage_columns(FEATURE_COLUMNS)
+    resolved_model_name = resolve_model_name(model_name)
+    model_factory = _model_factory(resolved_model_name)
     train_rows = [
         row for row in features.historical_rows
         if int(row["season"]) < features.current_season
     ]
-    model = HistoricalRateModel().fit(train_rows)
-    evaluation = _evaluate_chronological(features.historical_rows, HistoricalRateModel)
+    model = model_factory().fit(train_rows)
+    comparison_factories = (
+        {PRIMARY_MODEL_NAME: HistoricalRateModel}
+        if resolved_model_name != PRIMARY_MODEL_NAME
+        else None
+    )
+    evaluation = _evaluate_chronological(
+        features.historical_rows,
+        model_factory,
+        model_name=resolved_model_name,
+        comparison_model_factories=comparison_factories,
+    )
 
     raw_player_rows = []
     for row in features.current_rows:
@@ -116,7 +143,7 @@ def build_predictions(features: FeatureBuildResult, workbook_path: str | Path) -
                 "raw_next_boot_risk": raw_risk,
                 "next_boot_probability": 0.0,
                 "winner_probability": 0.0,
-                "explanation": _explain(row, raw_risk),
+                "explanation": _explain(row, raw_risk, resolved_model_name),
             }
         )
 
@@ -133,7 +160,11 @@ def build_predictions(features: FeatureBuildResult, workbook_path: str | Path) -
     projected_boot_order = _project_boot_order(player_rows, features.latest_final_n)
     metadata = {
         "generated_at": datetime.now(UTC).isoformat(),
-        "model_name": "historical_rate_baseline",
+        "model_name": resolved_model_name,
+        "model_selection_policy": (
+            "historical_rate_baseline remains the default; use experimental_next_boot "
+            "only when chronological holdout log loss and Brier score both improve."
+        ),
         "source_workbook": str(Path(workbook_path)),
         "current_season": features.current_season,
         "latest_episode": features.latest_episode,
@@ -148,6 +179,22 @@ def evaluate_chronological(rows: list[dict[str, object]], holdout_seasons: int =
     """Evaluate the historical-rate baseline with a chronological holdout split."""
 
     return _evaluate_chronological(rows, HistoricalRateModel, holdout_seasons)
+
+
+def resolve_model_name(model_name: str) -> str:
+    """Return the internal model identifier for a CLI/API model name."""
+
+    try:
+        return MODEL_NAME_ALIASES[model_name]
+    except KeyError as exc:
+        valid = ", ".join(sorted(MODEL_NAME_ALIASES))
+        raise ValueError(f"Unknown model '{model_name}'. Valid choices: {valid}") from exc
+
+
+def validate_model_available(model_name: str) -> None:
+    """Raise a clear error if a requested model cannot be constructed."""
+
+    _model_factory(resolve_model_name(model_name))()
 
 
 def save_predictions(bundle: PredictionBundle, output_path: str | Path) -> Path:
@@ -175,8 +222,19 @@ def _project_boot_order(players: list[dict[str, object]], latest_final_n: int) -
     return projected
 
 
-def _explain(row: dict[str, object], risk: float) -> list[str]:
-    reasons = [f"Baseline next-boot risk: {risk:.1%}."]
+def _model_factory(model_name: str) -> Callable[[], RiskModel]:
+    if model_name == PRIMARY_MODEL_NAME:
+        return HistoricalRateModel
+    if model_name == EXPERIMENTAL_MODEL_NAME:
+        from survivor_calculator.experimental import ExperimentalNextBootModel
+
+        return ExperimentalNextBootModel
+    raise ValueError(f"Unknown model: {model_name}")
+
+
+def _explain(row: dict[str, object], risk: float, model_name: str) -> list[str]:
+    label = "Experimental model" if model_name == EXPERIMENTAL_MODEL_NAME else "Baseline"
+    reasons = [f"{label} next-boot risk: {risk:.1%}."]
     if float(row.get("votes_received_to_date") or 0) > 0:
         reasons.append("Has received votes earlier in the season.")
     if float(row.get("individual_immunity_wins_to_date") or 0) > 0:

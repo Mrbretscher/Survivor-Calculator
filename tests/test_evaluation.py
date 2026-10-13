@@ -1,7 +1,7 @@
 import unittest
 
 from survivor_calculator.baseline import HistoricalRateModel
-from survivor_calculator.evaluation import assert_chronological_split, evaluate_chronological
+from survivor_calculator.evaluation import PRIMARY_MODEL_NAME, assert_chronological_split, evaluate_chronological
 
 
 class EvaluationTests(unittest.TestCase):
@@ -25,6 +25,24 @@ class EvaluationTests(unittest.TestCase):
         )
         self.assertIn("expected_calibration_error", evaluation["calibration"])
         self.assertTrue(any(bucket["count"] > 0 for bucket in evaluation["calibration"]["bins"]))
+        self.assertEqual(evaluation["probability_quality"]["recommendation"], "baseline_default")
+
+    def test_chronological_evaluation_compares_candidate_to_historical_rate_baseline(self) -> None:
+        rows = _evaluation_rows()
+
+        evaluation = evaluate_chronological(
+            rows,
+            ConstantRiskModel,
+            holdout_seasons=2,
+            model_name="constant_test_model",
+            comparison_model_factories={PRIMARY_MODEL_NAME: HistoricalRateModel},
+        )
+
+        comparison_names = [row["name"] for row in evaluation["baseline_comparisons"]]
+        self.assertEqual(comparison_names[:2], ["constant_test_model", "historical_rate_baseline"])
+        self.assertEqual(evaluation["primary_model"], "constant_test_model")
+        self.assertEqual(evaluation["probability_quality"]["reference_model"], "historical_rate_baseline")
+        self.assertIn("brier_score_delta_vs_baseline", evaluation["probability_quality"])
 
     def test_chronological_evaluation_skips_when_holdout_would_consume_all_seasons(self) -> None:
         evaluation = evaluate_chronological(_evaluation_rows(seasons=2), HistoricalRateModel, holdout_seasons=2)
@@ -84,6 +102,14 @@ def _row(season: int, candidate: str, target: int, votes_received: int) -> dict[
         "target_next_boot": target,
         "target_winner": 0,
     }
+
+
+class ConstantRiskModel:
+    def fit(self, rows: list[dict[str, object]]) -> "ConstantRiskModel":
+        return self
+
+    def predict_risk(self, row: dict[str, object]) -> float:
+        return 1.0
 
 
 if __name__ == "__main__":
