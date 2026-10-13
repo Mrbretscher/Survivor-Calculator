@@ -8,7 +8,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from survivor_calculator.api import DEFAULT_PREDICTIONS, DEFAULT_WORKBOOK, prediction_payload
+from survivor_calculator.api import (
+    DEFAULT_PREDICTIONS,
+    DEFAULT_WORKBOOK,
+    PredictionApiError,
+    current_season_payload,
+    error_payload,
+    prediction_payload,
+)
 
 
 class SurvivorApiHandler(BaseHTTPRequestHandler):
@@ -28,19 +35,13 @@ class SurvivorApiHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/current-season":
                 payload = prediction_payload(DEFAULT_WORKBOOK, DEFAULT_PREDICTIONS)
-                metadata = payload["metadata"]
-                self._send_json(
-                    {
-                        "current_season": metadata["current_season"],
-                        "latest_episode": metadata["latest_episode"],
-                        "latest_final_n": metadata["latest_final_n"],
-                        "active_players": metadata["active_players"],
-                    }
-                )
+                self._send_json(current_season_payload(payload))
                 return
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
-        except Exception as exc:  # pragma: no cover - defensive server boundary
-            self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+        except PredictionApiError as exc:
+            self._send_json(error_payload(exc), exc.status_code)
+        except Exception:  # pragma: no cover - defensive server boundary
+            self._send_json({"error": "Internal server error"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def log_message(self, format: str, *args: object) -> None:
         return
