@@ -64,12 +64,19 @@ def normalize_table(name: str, payload: object) -> list[dict[str, str | None]]:
     missing = REQUIRED_COLUMNS[name] - columns
     if missing:
         raise ValueError(f"Upstream table {name} is missing columns: {', '.join(sorted(missing))}")
-    # The model currently uses US season numbers as keys. Reject mixing franchises.
-    if name != "Castaway Details":
-        rows = [row for row in rows if row.get("version") == "US"]
-        if not rows:
-            raise ValueError(f"Upstream table {name} contains no US records.")
     return rows
+
+
+def us_model_tables(
+    tables: dict[str, list[dict[str, str | None]]],
+) -> dict[str, list[dict[str, str | None]]]:
+    """Separate US model seasons while preserving all franchises for analytics."""
+    selected = {}
+    for name, rows in tables.items():
+        selected[name] = rows if name == "Castaway Details" else [row for row in rows if row.get("version") == "US"]
+        if not selected[name]:
+            raise ValueError(f"Upstream table {name} contains no US modeling records.")
+    return selected
 
 
 def _digest(value: object) -> str:
@@ -135,7 +142,8 @@ def refresh(output_dir: Path, model_name: str = "historical-rate-baseline", *, f
                 columns = sorted({key for row in rows for key in row})
                 _write_feature_rows([{key: row.get(key) for key in columns} for row in rows],
                                     staged / "tables" / f"{sheet.lower().replace(' ', '_')}.csv")
-            build_from_tables(tables, Path("upstream-json"), staged, model_name, "chronological")
+            build_from_tables(tables, Path("upstream-json"), staged, model_name, "chronological",
+                              feature_tables=us_model_tables(tables))
             predictions_path = staged / "current_predictions.json"
             predictions = json.loads(predictions_path.read_text(encoding="utf-8"))
             if not predictions["players"] or not (staged / "historical_episode_states.csv").stat().st_size:

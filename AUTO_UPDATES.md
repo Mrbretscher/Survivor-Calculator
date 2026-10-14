@@ -14,8 +14,8 @@ installation is required. The existing workbook build still works.
 The default remains the historical-rate baseline. Changing data, model choice,
 Python pipeline source, or missing/modified generated outputs triggers a rebuild.
 Unchanged data skips training. Use `--force` to rebuild explicitly. The updater
-filters season tables to US records because the feature pipeline keys seasons by
-number; analytics from automatic updates consequently cover US seasons only.
+filters model season tables to US records because the feature pipeline keys seasons
+by number; analytics and exported source tables retain all available franchises.
 Castaway demographics remain available for the US players' identifiers.
 
 Only completed historical seasons supply training labels. New episodes in an
@@ -78,11 +78,37 @@ seconds, so API data changes need no Netlify rebuild. An already open browser pa
 may need a reload. Confirm updated prediction `source_data.commit` and episode,
 then load predictions and a chart from the public website.
 
-This checkout does not establish whether the workflow has been pushed, whether
-the GitHub secret exists, or whether a hosted run succeeds. Those are activation
-checks, separate from local tests. GitHub Actions and Vercel account limits apply.
-The Vercel CLI is pinned to 64.0.2. Actions use major-version tags and Python
-dependencies follow the existing version ranges, so the entire build is not locked.
+The production environment was configured and the first hosted run succeeded on
+October 14, 2026: [initial verified run](https://github.com/Mrbretscher/Survivor-Calculator/actions/runs/38631829057).
+Check the workflow's current run history for ongoing deployment status.
+GitHub Actions and Vercel account limits apply.
+The Vercel CLI is pinned to 64.0.2 and Actions are pinned to official release
+commits. The runner uses Ubuntu 24.04. Python dependencies follow the existing
+version ranges, so the entire build is not locked.
+
+## Verification commands
+
+Run from the repository root in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_refresh.py
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p 'test_deployment*.py'
+.\.venv\Scripts\python.exe -m survivor_calculator.cli refresh --output-dir outputs/upstream-smoke
+.\.venv\Scripts\python.exe -m survivor_calculator.deployment_bundle --data-dir outputs/upstream-smoke --output outputs/upstream-api-all-franchises
+.\.venv\Scripts\python.exe -m pip check
+git diff --check
+```
+
+The full local suite passed all 73 tests; 14 refresh tests and seven deployment
+tests also passed in targeted runs. `pip check` found no broken requirements.
+The real upstream build produced season 51, episode 4, 17 active players, and
+1,462 analytics rows. A repeated unchanged refresh skipped training. The initial
+hosted run passed tests, deployment, public readiness and snapshot identity checks,
+and cache save. Its deprecated action runtime warnings were addressed by the
+pinned action releases above. Local Git emitted LF-to-CRLF conversion notices;
+`git diff --check` found no whitespace errors. Python lint/type tools are not
+configured, and no frontend files changed in this implementation.
 
 ## Implementation plan and boundaries
 
@@ -103,7 +129,7 @@ dependencies follow the existing version ranges, so the entire build is not lock
 8. **Advanced modeling approach:** Existing optional sklearn models only, selected
    explicitly through the CLI or repository configuration.
 9. **Validation and leakage controls:** Existing feature exclusion and completed
-   season labels, chronological evaluation, US-only season keys, pinned snapshot.
+   season labels, chronological evaluation, US-only model season keys, pinned snapshot.
 10. **Evaluation metrics:** Existing log loss, Brier score, top-1, top-3, and
     baseline comparisons; no new claim of calibration or production readiness.
 11. **System architecture:** Scheduled Actions job -> pinned JSON -> validated

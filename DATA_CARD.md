@@ -25,8 +25,9 @@ The upstream source appears to be the [`survivoR`](https://github.com/doehm/surv
 Git commit. It records table URLs, retrieval time, source and output checksums,
 model selection, and pipeline code checksum in `refresh_manifest.json`, with source
 provenance also included in prediction metadata. These generated files are ignored
-by Git. Automatic season tables are filtered to US records to match model season
-keys; automatic analytics therefore cover US seasons. JSON booleans are converted
+by Git. Automatic model tables are filtered to US records to match model season
+keys; analytics and exported source tables retain all available franchises.
+JSON booleans are converted
 to the workbook reader's `1`/`0` convention. This records provenance for newly
 fetched snapshots, not the original workbook's version or download date.
 

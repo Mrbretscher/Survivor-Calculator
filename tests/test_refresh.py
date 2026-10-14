@@ -13,7 +13,7 @@ from fixtures import minimal_core_tables
 from survivor_calculator.cli import build_from_tables, main
 from survivor_calculator.api import prediction_payload
 from survivor_calculator.deployment_bundle import prepare_bundle
-from survivor_calculator.refresh import COMMIT_URL, normalize_table, refresh
+from survivor_calculator.refresh import COMMIT_URL, normalize_table, refresh, us_model_tables
 
 
 class RefreshTests(unittest.TestCase):
@@ -134,17 +134,29 @@ class RefreshTests(unittest.TestCase):
             refresh(self.output)
         self.assertTrue(lock.exists())
 
-    def test_boolean_normalization_and_us_filter(self) -> None:
+    def test_boolean_normalization_preserves_all_franchises(self) -> None:
         rows = normalize_table("Castaways", [
             {"version": "US", "season": 1, "castaway_id": "A", "castaway": "A", "winner": True},
             {"version": "AU", "season": 99, "castaway_id": "B", "castaway": "B", "winner": False},
         ])
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["winner"], "1")
         self.assertEqual(rows[0]["season"], "1")
         self.assertEqual(normalize_table("Castaway Details", [{
             "castaway_id": "A", "gender": None, "occupation": "Teacher", "flag": False,
         }])[0]["flag"], "0")
+
+    def test_international_analytics_do_not_enter_us_model_features(self) -> None:
+        self.tables["Castaways"].append({
+            "version": "AU", "season": "99", "castaway_id": "AU-A", "castaway": "Alex", "winner": "1",
+        })
+        refresh(self.output)
+        payload = prediction_payload(predictions_path=self.output / "current_predictions.json")
+        self.assertEqual(payload["metadata"]["current_season"], 2)
+        analytics = (self.output / "analytics_player_season.csv").read_text()
+        self.assertIn("AU-A", analytics)
+        for table in us_model_tables(self.tables).values():
+            self.assertFalse(any(row.get("castaway_id") == "AU-A" for row in table))
 
     def test_rejects_invalid_payloads(self) -> None:
         for payload in ([], {}, ["bad"], [{"field": []}]):

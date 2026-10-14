@@ -121,11 +121,13 @@ def build_from_tables(
     output_dir: Path,
     model_name: str,
     evaluation_strategy: str,
+    *,
+    feature_tables: dict[str, list[dict[str, str | None]]] | None = None,
 ) -> int:
     """Build the same analytics and model outputs for workbook or upstream tables."""
     analytics_rows = build_player_season_rows(tables)
     analytics_path = export_player_season_rows(analytics_rows, output_dir / "analytics_player_season.csv")
-    features = build_features(tables)
+    features = build_features(tables if feature_tables is None else feature_tables)
     _write_feature_rows(features.historical_rows, output_dir / "historical_episode_states.csv")
     _write_feature_rows(features.current_rows, output_dir / "current_episode_state.csv")
     soc_path = export_soc_mapping(features.soc_mappings, output_dir / "soc_mapping.csv")
