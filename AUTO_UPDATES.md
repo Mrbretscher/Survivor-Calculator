@@ -73,10 +73,11 @@ notifications. A successful deployment followed by a failed readiness check can
 already be live; use Vercel rollback if needed. This workflow does not implement
 automatic rollback or model-quality-based promotion.
 
-The Next.js frontend already revalidates predictions and analytics after 60
-seconds, so API data changes need no Netlify rebuild. An already open browser page
-may need a reload. Confirm updated prediction `source_data.commit` and episode,
-then load predictions and a chart from the public website.
+The Next.js source requests 60-second revalidation. This requires the supported
+Netlify Next.js runtime; uploading prerendered HTML alone cannot regenerate the
+homepage. With that runtime configured, API data changes need no Netlify rebuild.
+An already open browser page may need a reload. Confirm updated prediction
+`source_data.commit` and episode, then load predictions and a chart from the site.
 
 The production environment was configured and the first hosted run succeeded on
 October 14, 2026: [initial verified run](https://github.com/Mrbretscher/Survivor-Calculator/actions/runs/38631829057).
@@ -85,6 +86,36 @@ GitHub Actions and Vercel account limits apply.
 The Vercel CLI is pinned to 64.0.2 and Actions are pinned to official release
 commits. The runner uses Ubuntu 24.04. Python dependencies follow the existing
 version ranges, so the entire build is not locked.
+
+### Hosted verification on October 14, 2026
+
+- [Final API deployment](https://github.com/Mrbretscher/Survivor-Calculator/actions/runs/38632537896)
+  passed with the pinned Actions. The public API served source commit
+  `2b8c3a32ed7b2b59e24105b0a89b3322eb1b1b0a`, season 51, episode 4, 17 players,
+  and 1,462 analytics rows. `/ready` returned ready. Analytics POST returned 200
+  with the correct Netlify CORS origin.
+- [Unchanged-data run](https://github.com/Mrbretscher/Survivor-Calculator/actions/runs/38632828372)
+  restored the cache and skipped training and deployment. The schedule is active.
+  Hosted tests ran 73 tests with seven expected skips for missing local workbook
+  and optional ML dependencies; all 73 local tests passed without skips.
+- **Frontend remains unresolved:** the public Netlify homepage returned 200 but
+  continued displaying the original 18:13 UTC generation time after the API served
+  a 20:30 UTC snapshot. Its client JavaScript references the stable API URL.
+  No Netlify build status was present on the latest GitHub commit. This suggests
+  checking whether the site uses uploaded static files or a correctly configured
+  Git-linked Next.js deployment; the root cause is not yet confirmed.
+- Netlify account access is required to inspect and repair that hosting setup.
+  No local Netlify CLI login was found. Browser access timed out on
+  `Emulation.setFocusEmulationEnabled`, including a retry after resetting the
+  browser session. The unauthenticated Netlify site API returned 401.
+
+To finish the visible website update, connect the existing Netlify project to
+`Mrbretscher/Survivor-Calculator`, branch `master`, if it is not already linked.
+Use base `frontend`, build `npm run build`, publish `.next`, and production
+`NEXT_PUBLIC_API_BASE_URL=https://survivorcalc.vercel.app`. Run a production build
+and confirm the Next.js adapter provisions the server runtime. Then confirm the
+homepage's Generated timestamp follows the API and that analytics charts load.
+See [Netlify's Next.js runtime documentation](https://docs.netlify.com/build/frameworks/framework-setup-guides/nextjs/overview/).
 
 ## Verification commands
 
