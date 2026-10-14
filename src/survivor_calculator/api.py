@@ -117,6 +117,7 @@ class PredictionMetadataResponse(BaseModel):  # type: ignore[misc]
     model_name: str
     model_selection_policy: str
     source_workbook: str
+    source_data: dict[str, object] | None = None
     current_season: int
     latest_episode: int
     latest_final_n: int
@@ -318,7 +319,7 @@ def validate_prediction_payload(value: object) -> PredictionPayload:
 
 def _validate_metadata(value: object) -> dict[str, object]:
     metadata = _required_mapping(value, "metadata")
-    return {
+    validated: dict[str, object] = {
         "generated_at": _required_string(metadata, "generated_at"),
         "model_name": _required_string(metadata, "model_name"),
         "model_selection_policy": _required_string(metadata, "model_selection_policy"),
@@ -329,6 +330,9 @@ def _validate_metadata(value: object) -> dict[str, object]:
         "active_players": _required_int(metadata, "active_players"),
         "disclaimer": _required_string(metadata, "disclaimer"),
     }
+    if metadata.get("source_data") is not None:
+        validated["source_data"] = dict(_required_mapping(metadata["source_data"], "metadata.source_data"))
+    return validated
 
 
 def _validate_player(value: object, field: str) -> dict[str, object]:

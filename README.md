@@ -29,6 +29,22 @@ python -m unittest discover -s tests
 
 Generated files are written under `data/processed/` and are ignored by Git.
 
+## Automatic Updates
+
+To fetch the latest upstream GitHub JSON data and retrain only when inputs change:
+
+```powershell
+.\.venv\Scripts\python.exe -m survivor_calculator.cli refresh
+```
+
+The updater rebuilds predictions, analytics, and the dashboard with chronological
+evaluation and records the source commit and checksums. The workbook build remains
+available. An hourly GitHub Actions workflow can refresh the hosted Vercel API;
+the existing Netlify frontend then picks up its new data. See
+[AUTO_UPDATES.md](AUTO_UPDATES.md) for required hosting credentials, activation,
+model selection, failure handling, and verification. The workflow must be pushed
+and configured before automatic hosted updates are active.
+
 The build command defaults to the dependency-light historical-rate baseline. To try the experimental scikit-learn model, install the optional ML extras in your project environment and opt in:
 
 ```powershell
@@ -81,7 +97,8 @@ The project name and workbook filename indicate the upstream source is the `surv
 
 Do not treat that as full provenance for the local workbook yet. The repo currently does not record:
 
-- the exact download URL used for `survivoR.xlsx`;
+- the direct workbook file URL (the user confirmed the download page as
+  [Survivor Stats DB](https://survivorstatsdb.com/download) on October 14, 2026);
 - the upstream package or data version used to create the workbook;
 - the workbook download date;
 - whether the workbook was modified after download;
@@ -90,6 +107,12 @@ Do not treat that as full provenance for the local workbook yet. The repo curren
 Before publishing the workbook, generated data, or a public website that serves derived records, verify the upstream license text, preserve required attribution, record the exact source/version/date, and document whether redistribution of the workbook and derived outputs is permitted.
 
 See [DATA_CARD.md](DATA_CARD.md) for the current data inventory, handling notes, and release checklist.
+
+Automatic updates instead use the upstream project's documented
+[JSON exports](https://github.com/doehm/survivoR/tree/master/dev/json) and record
+their exact Git commit, table URLs, retrieval time, and checksums in generated
+metadata. This records provenance for those builds without assigning an upstream
+version or download date to the original workbook.
 
 ## Workbook Handling
 

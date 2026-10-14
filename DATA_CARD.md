@@ -13,7 +13,27 @@ The upstream source appears to be the [`survivoR`](https://github.com/doehm/surv
 - Repository tracking status: ignored by `.gitignore`
 - Ingestion entry point: `survivor_calculator.ingest.WorkbookReader`
 - Build command: `python -m survivor_calculator.cli build --workbook survivoR.xlsx`
-- Current unresolved provenance status: source URL, upstream version, download date, modification history, and checksum are not recorded.
+- User-confirmed workbook download page (October 14, 2026):
+  [Survivor Stats DB](https://survivorstatsdb.com/download).
+- Current unresolved workbook provenance: direct file URL, upstream version,
+  download date, modification history, and checksum are not recorded.
+
+## Automatic Source Updates
+
+`python -m survivor_calculator.cli refresh` uses the upstream project's
+[JSON exports](https://github.com/doehm/survivoR/tree/master/dev/json) at one pinned
+Git commit. It records table URLs, retrieval time, source and output checksums,
+model selection, and pipeline code checksum in `refresh_manifest.json`, with source
+provenance also included in prediction metadata. These generated files are ignored
+by Git. Automatic season tables are filtered to US records to match model season
+keys; automatic analytics therefore cover US seasons. JSON booleans are converted
+to the workbook reader's `1`/`0` convention. This records provenance for newly
+fetched snapshots, not the original workbook's version or download date.
+
+See [AUTO_UPDATES.md](AUTO_UPDATES.md) for scheduling, hosting setup, failure
+behavior, chronological evaluation, and activation checks. Upstream data remains
+subject to its license and attribution requirements; the existing public-release
+checklist still applies.
 
 ## Workbook Inventory
 
@@ -128,7 +148,7 @@ Known:
 
 Unresolved:
 
-- The exact local workbook source URL is not recorded.
+- The download page is user-confirmed; the direct workbook file URL is not recorded.
 - The upstream package version, data version, or commit is not recorded.
 - The workbook download date is not recorded.
 - The workbook checksum is not recorded.

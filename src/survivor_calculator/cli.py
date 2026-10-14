@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Validation strategy to report in prediction metadata.",
     )
 
+    refresh_parser = subparsers.add_parser("refresh", help="Fetch changed upstream data and retrain")
+    refresh_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    refresh_parser.add_argument("--model", choices=sorted(MODEL_NAME_ALIASES), default="historical-rate-baseline")
+    refresh_parser.add_argument("--force", action="store_true", help="Rebuild even when data is unchanged")
+
     dashboard_parser = subparsers.add_parser("dashboard", help="Build static dashboard HTML")
     dashboard_parser.add_argument("--predictions", default=str(DEFAULT_PREDICTIONS))
     dashboard_parser.add_argument("--output", default=str(DEFAULT_DASHBOARD))
@@ -58,6 +63,16 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--port", type=int, default=8000)
 
     args = parser.parse_args(argv)
+    if args.command == "refresh":
+        from survivor_calculator.refresh import refresh
+
+        try:
+            changed = refresh(Path(args.output_dir), args.model, force=args.force)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print("Rebuilt from upstream data." if changed else "Upstream data unchanged; skipped retraining.")
+        return 0
     if args.command == "inspect":
         return _inspect(Path(args.workbook))
     if args.command == "build":
@@ -97,6 +112,17 @@ def _build(workbook: Path, output_dir: Path, model_name: str, evaluation_strateg
     print(f"Exported {len(exported)} clean CSV tables.")
 
     tables = load_core_tables(workbook)
+    return build_from_tables(tables, workbook, output_dir, model_name, evaluation_strategy)
+
+
+def build_from_tables(
+    tables: dict[str, list[dict[str, str | None]]],
+    source: Path,
+    output_dir: Path,
+    model_name: str,
+    evaluation_strategy: str,
+) -> int:
+    """Build the same analytics and model outputs for workbook or upstream tables."""
     analytics_rows = build_player_season_rows(tables)
     analytics_path = export_player_season_rows(analytics_rows, output_dir / "analytics_player_season.csv")
     features = build_features(tables)
@@ -105,7 +131,7 @@ def _build(workbook: Path, output_dir: Path, model_name: str, evaluation_strateg
     soc_path = export_soc_mapping(features.soc_mappings, output_dir / "soc_mapping.csv")
     predictions = build_predictions(
         features,
-        workbook,
+        source,
         model_name=model_name,
         evaluation_strategy=evaluation_strategy,
     )

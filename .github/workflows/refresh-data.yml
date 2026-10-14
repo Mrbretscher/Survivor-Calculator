@@ -1,0 +1,122 @@
+name: Refresh Survivor data and hosted API
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Retrain and redeploy even if data is unchanged
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: survivor-production-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      SURVIVOR_MODEL: ${{ vars.SURVIVOR_MODEL || 'historical-rate-baseline' }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      SURVIVOR_API_URL: ${{ vars.SURVIVOR_API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check hosting configuration
+        shell: bash
+        run: |
+          for setting in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID SURVIVOR_API_URL; do
+            if [ -z "${!setting}" ]; then
+              echo "::error::Set $setting in the GitHub production environment. See AUTO_UPDATES.md."
+              exit 1
+            fi
+          done
+      - name: Install existing project extras
+        shell: bash
+        run: |
+          if [[ "$SURVIVOR_MODEL" == historical* ]]; then
+            python -m pip install -e '.[api]'
+          else
+            python -m pip install -e '.[api,ml]'
+          fi
+      - name: Run tests
+        run: python -m unittest discover -s tests
+      - name: Restore last successfully deployed snapshot
+        id: snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: data/processed
+          key: survivor-refresh-v1-${{ env.SURVIVOR_MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            survivor-refresh-v1-${{ env.SURVIVOR_MODEL }}-
+      - name: Fetch changes and retrain
+        id: refresh
+        env:
+          FORCE_REFRESH: ${{ inputs.force || false }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from survivor_calculator.refresh import refresh
+          changed = refresh(Path('data/processed'), os.environ['SURVIVOR_MODEL'],
+                            force=os.environ['FORCE_REFRESH'].lower() == 'true')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"changed={str(changed).lower()}\n")
+          print('Rebuilt model and predictions.' if changed else 'No data changes; no deployment needed.')
+          PY
+      - name: Prepare validated API bundle
+        if: steps.refresh.outputs.changed == 'true'
+        run: python -m survivor_calculator.deployment_bundle --output outputs/refreshed-api
+      - name: Deploy production API snapshot
+        if: steps.refresh.outputs.changed == 'true'
+        working-directory: outputs/refreshed-api
+        shell: bash
+        run: |
+          npx --yes vercel@64.0.2 deploy --prod --yes --token "$VERCEL_TOKEN"
+      - name: Check public production snapshot
+        if: steps.refresh.outputs.changed == 'true'
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.request
+          from pathlib import Path
+          expected = json.loads(Path('data/processed/current_predictions.json').read_text())['metadata']
+          base = os.environ['SURVIVOR_API_URL'].rstrip('/')
+          if not base.startswith('https://'):
+              raise ValueError('SURVIVOR_API_URL must be the public HTTPS production API origin.')
+          for attempt in range(6):
+              try:
+                  with urllib.request.urlopen(base + '/ready', timeout=30) as response:
+                      assert json.load(response)['status'] == 'ready', 'API is not ready'
+                  with urllib.request.urlopen(base + '/api/predictions/current', timeout=30) as response:
+                      actual = json.load(response)['metadata']
+                  assert actual['source_data']['commit'] == expected['source_data']['commit'], 'Wrong source commit'
+                  assert actual['generated_at'] == expected['generated_at'], 'Old prediction snapshot'
+                  print('Verified fresh public predictions:', actual['source_data']['commit'])
+                  break
+              except Exception:
+                  if attempt == 5:
+                      raise
+                  time.sleep(5)
+          PY
+      # Never cache a new manifest before deployment succeeds: the next run must
+      # retry a failed deployment even when upstream has not changed again.
+      - name: Save successfully deployed snapshot
+        if: steps.refresh.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/processed
+          key: survivor-refresh-v1-${{ env.SURVIVOR_MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}

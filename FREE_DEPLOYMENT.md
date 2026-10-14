@@ -94,6 +94,11 @@ Also test in a private window and from another device, refresh the page, and con
 
 ## 5. Update the API snapshot later
 
+For automatic hourly upstream checks, retraining, and Vercel deployment, use the
+workflow and credential setup in [AUTO_UPDATES.md](AUTO_UPDATES.md). The Netlify
+frontend reads fresh API data through its existing 60-second revalidation. The
+manual workbook route below remains available.
+
 Rebuild data locally and generate a new bundle directory. Existing bundles are never overwritten:
 
 ```powershell
