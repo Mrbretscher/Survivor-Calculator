@@ -38,8 +38,26 @@ def minimal_core_tables() -> dict[str, list[dict[str, str | None]]]:
             {"season": "2", "episode": "1", "castaway_id": "S2-D", "vote_id": "S2-C", "nullified": "0"},
         ],
         "Challenge Results": [
-            {"season": "1", "episode": "1", "castaway_id": "S1-B", "won": "1", "won_individual_immunity": "0"},
-            {"season": "2", "episode": "1", "castaway_id": "S2-C", "won": "1", "won_individual_immunity": "1"},
+            {
+                "season": "1",
+                "episode": "1",
+                "castaway_id": "S1-B",
+                "challenge_type": "Immunity",
+                "outcome_type": "Tribal",
+                "won": "1",
+                "won_tribal_immunity": "1",
+                "won_individual_immunity": "0",
+            },
+            {
+                "season": "2",
+                "episode": "1",
+                "castaway_id": "S2-C",
+                "challenge_type": "Immunity",
+                "outcome_type": "Individual",
+                "won": "1",
+                "won_tribal_immunity": "0",
+                "won_individual_immunity": "1",
+            },
         ],
         "Confessionals": [
             {"season": "1", "episode": "1", "castaway_id": "S1-A", "confessional_count": "2", "confessional_time": "15.5"},

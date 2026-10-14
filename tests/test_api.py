@@ -8,10 +8,12 @@ from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.request import Request
 from urllib.request import urlopen
 
 from fixtures import minimal_core_tables
 from survivor_calculator import server as api_server
+from survivor_calculator.analytics import build_player_season_rows, export_player_season_rows
 from survivor_calculator.baseline import build_predictions, save_predictions
 from survivor_calculator.features import build_features
 
@@ -20,12 +22,17 @@ class ApiEndpointTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.predictions_path = Path(self.temp_dir.name) / "current_predictions.json"
-        features = build_features(minimal_core_tables())
+        self.analytics_path = Path(self.temp_dir.name) / "analytics_player_season.csv"
+        tables = minimal_core_tables()
+        export_player_season_rows(build_player_season_rows(tables), self.analytics_path)
+        features = build_features(tables)
         bundle = build_predictions(features, Path("fixture.xlsx"))
         save_predictions(bundle, self.predictions_path)
 
         self.old_predictions_path = api_server.DEFAULT_PREDICTIONS
+        self.old_analytics_path = api_server.DEFAULT_ANALYTICS
         api_server.DEFAULT_PREDICTIONS = self.predictions_path
+        api_server.DEFAULT_ANALYTICS = self.analytics_path
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), api_server.SurvivorApiHandler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
@@ -35,6 +42,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.thread.join(timeout=5)
         self.httpd.server_close()
         api_server.DEFAULT_PREDICTIONS = self.old_predictions_path
+        api_server.DEFAULT_ANALYTICS = self.old_analytics_path
         self.temp_dir.cleanup()
 
     def test_health_endpoint_reports_ok(self) -> None:
@@ -100,11 +108,87 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn(str(self.predictions_path), payload["error"])
         self.assertNotIn(str(Path.home()), payload["error"])
 
+    def test_analytics_schema_endpoint_returns_available_contract(self) -> None:
+        status, payload = self._get_json("/api/analytics/schema")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["dataset"]["id"], "analytics_player_season")
+        self.assertEqual(payload["dataset"]["row_count"], 4)
+        self.assertIn("occupation", {dimension["id"] for dimension in payload["dimensions"]})
+        self.assertIn("social_proxy_no_votes_rate", {metric["id"] for metric in payload["metrics"]})
+
+    def test_analytics_presets_endpoint_returns_preset_configs(self) -> None:
+        status, payload = self._get_json("/api/analytics/presets")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        preset_ids = {preset["id"] for preset in payload["presets"]}
+        self.assertEqual(len(preset_ids), 10)
+        self.assertIn("occupations_cast_most_often", preset_ids)
+        self.assertIn("age_buckets_most_winners", preset_ids)
+
+    def test_analytics_query_endpoint_returns_chart_rows(self) -> None:
+        status, payload = self._post_json(
+            "/api/analytics/query",
+            {
+                "dimension": "age_bucket",
+                "metric": "contestant_count",
+                "filters": [{"field": "season", "operator": "equals", "value": "1"}],
+                "sort": {"field": "label", "direction": "asc"},
+            },
+        )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["metadata"]["filtered_row_count"], 2)
+        self.assertEqual(
+            [(row["label"], row["value"], row["count"]) for row in payload["rows"]],
+            [("25-34", 1, 1), ("35-44", 1, 1)],
+        )
+
+    def test_invalid_analytics_query_returns_sanitized_client_error(self) -> None:
+        status, payload = self._post_json(
+            "/api/analytics/query",
+            {"dimension": "not_real", "metric": "contestant_count"},
+        )
+
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(payload, {"error": "Unsupported dimension: not_real"})
+        self.assertNotIn(str(self.analytics_path), payload["error"])
+        self.assertNotIn(self.temp_dir.name, payload["error"])
+
+    def test_missing_analytics_file_returns_clear_sanitized_error(self) -> None:
+        missing_path = Path(self.temp_dir.name) / "private" / "missing_analytics.csv"
+        api_server.DEFAULT_ANALYTICS = missing_path
+
+        status, payload = self._get_json("/api/analytics/schema")
+
+        self.assertEqual(status, HTTPStatus.SERVICE_UNAVAILABLE)
+        self.assertEqual(
+            payload,
+            {"error": "Analytics data is not available. Run `survivor-calculator build` before serving the API."},
+        )
+        self.assertNotIn(str(missing_path), payload["error"])
+        self.assertNotIn(self.temp_dir.name, payload["error"])
+
     def _get_json(self, path: str) -> tuple[int, dict[str, object]]:
         port = self.httpd.server_address[1]
         url = f"http://127.0.0.1:{port}{path}"
         try:
             with urlopen(url, timeout=5) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def _post_json(self, path: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        port = self.httpd.server_address[1]
+        url = f"http://127.0.0.1:{port}{path}"
+        request = Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=5) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             return exc.code, json.loads(exc.read().decode("utf-8"))

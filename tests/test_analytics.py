@@ -58,10 +58,14 @@ class PlayerSeasonAnalyticsTests(unittest.TestCase):
 
         self.assertEqual(bea["challenge_appearances_total"], 1)
         self.assertEqual(bea["challenge_wins_total"], 1)
+        self.assertEqual(bea["team_challenge_appearances_total"], 1)
+        self.assertEqual(bea["team_challenge_wins_total"], 1)
         self.assertEqual(bea["votes_cast_total"], 1)
 
         self.assertEqual(cam["challenge_appearances_total"], 1)
         self.assertEqual(cam["challenge_wins_total"], 1)
+        self.assertEqual(cam["team_challenge_appearances_total"], 0)
+        self.assertEqual(cam["team_challenge_wins_total"], 0)
         self.assertEqual(cam["individual_immunity_appearances_total"], 1)
         self.assertEqual(cam["individual_immunity_wins_total"], 1)
         self.assertEqual(cam["votes_received_total"], 1)

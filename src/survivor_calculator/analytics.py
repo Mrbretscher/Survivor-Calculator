@@ -31,6 +31,8 @@ ANALYTICS_PLAYER_SEASON_COLUMNS = (
     "winner",
     "challenge_appearances_total",
     "challenge_wins_total",
+    "team_challenge_appearances_total",
+    "team_challenge_wins_total",
     "individual_immunity_appearances_total",
     "individual_immunity_wins_total",
     "votes_received_total",
@@ -67,6 +69,8 @@ def build_player_season_rows(tables: dict[str, list[dict[str, str | None]]]) -> 
 
     challenge_appearances: dict[tuple[str, str, int, str], int] = defaultdict(int)
     challenge_wins: dict[tuple[str, str, int, str], int] = defaultdict(int)
+    team_challenge_appearances: dict[tuple[str, str, int, str], int] = defaultdict(int)
+    team_challenge_wins: dict[tuple[str, str, int, str], int] = defaultdict(int)
     individual_immunity_appearances: dict[tuple[str, str, int, str], int] = defaultdict(int)
     individual_immunity_wins: dict[tuple[str, str, int, str], int] = defaultdict(int)
     for row in challenge_results:
@@ -76,6 +80,10 @@ def build_player_season_rows(tables: dict[str, list[dict[str, str | None]]]) -> 
         challenge_appearances[key] += 1
         if row.get("won") == "1":
             challenge_wins[key] += 1
+        if _is_team_challenge_row(row):
+            team_challenge_appearances[key] += 1
+            if _won_team_challenge(row):
+                team_challenge_wins[key] += 1
         if _is_individual_immunity_row(row):
             individual_immunity_appearances[key] += 1
         if row.get("won_individual_immunity") == "1":
@@ -140,6 +148,8 @@ def build_player_season_rows(tables: dict[str, list[dict[str, str | None]]]) -> 
                 "winner": _to_bool(castaway.get("winner")) or winner_ids.get(season_key) == castaway_id,
                 "challenge_appearances_total": challenge_appearances[key],
                 "challenge_wins_total": challenge_wins[key],
+                "team_challenge_appearances_total": team_challenge_appearances[key],
+                "team_challenge_wins_total": team_challenge_wins[key],
                 "individual_immunity_appearances_total": individual_immunity_appearances[key],
                 "individual_immunity_wins_total": individual_immunity_wins[key],
                 "votes_received_total": votes_received[key],
@@ -199,6 +209,21 @@ def _is_individual_immunity_row(row: dict[str, str | None]) -> bool:
     return (
         row.get("won_individual_immunity") == "1"
         or ("immunity" in challenge_type and "individual" in outcome_type)
+    )
+
+
+def _is_team_challenge_row(row: dict[str, str | None]) -> bool:
+    outcome_type = (row.get("outcome_type") or "").lower()
+    return "tribal" in outcome_type or "team" in outcome_type
+
+
+def _won_team_challenge(row: dict[str, str | None]) -> bool:
+    return (
+        row.get("won_tribal_reward") == "1"
+        or row.get("won_tribal_immunity") == "1"
+        or row.get("won_team_reward") == "1"
+        or row.get("won_team_immunity") == "1"
+        or row.get("won") == "1"
     )
 
 

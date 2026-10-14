@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 from http import HTTPStatus
 from pathlib import Path
 from typing import Literal, TypedDict
 
+from survivor_calculator.analytics import ANALYTICS_PLAYER_SEASON_COLUMNS
+from survivor_calculator.analytics_query import (
+    DIMENSIONS,
+    METRICS,
+    SUPPORTED_FILTER_FIELDS,
+    AnalyticsQueryError,
+    preset_configs,
+    run_chart_query,
+)
+
 try:
-    from fastapi import FastAPI
+    from fastapi import Body, FastAPI
     from fastapi.responses import JSONResponse
 except ModuleNotFoundError:  # pragma: no cover - exercised only without optional dependency
+    Body = None  # type: ignore[assignment]
     FastAPI = None  # type: ignore[assignment]
     JSONResponse = None  # type: ignore[assignment]
 
@@ -22,6 +34,7 @@ except ModuleNotFoundError:  # pragma: no cover - FastAPI depends on pydantic
 
 DEFAULT_WORKBOOK = Path(os.environ.get("SURVIVOR_WORKBOOK_PATH", "survivoR.xlsx"))
 DEFAULT_PREDICTIONS = Path(os.environ.get("SURVIVOR_PREDICTIONS_PATH", "data/processed/current_predictions.json"))
+DEFAULT_ANALYTICS = Path(os.environ.get("SURVIVOR_ANALYTICS_PATH", "data/processed/analytics_player_season.csv"))
 
 
 class HealthPayload(TypedDict):
@@ -44,6 +57,23 @@ class PredictionPayload(TypedDict):
     players: list[dict[str, object]]
     projected_boot_order: list[dict[str, object]]
     evaluation: dict[str, object]
+
+
+class AnalyticsSchemaPayload(TypedDict):
+    dataset: dict[str, object]
+    dimensions: list[dict[str, object]]
+    metrics: list[dict[str, object]]
+    filters: list[dict[str, object]]
+    chart_types: list[str]
+
+
+class AnalyticsPresetsPayload(TypedDict):
+    presets: list[dict[str, object]]
+
+
+class AnalyticsQueryPayload(TypedDict):
+    metadata: dict[str, object]
+    rows: list[dict[str, object]]
 
 
 class HealthResponse(BaseModel):  # type: ignore[misc]
@@ -126,6 +156,27 @@ class PredictionDataInvalid(PredictionApiError):
         )
 
 
+class AnalyticsDataUnavailable(PredictionApiError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Analytics data is not available. Run `survivor-calculator build` before serving the API.",
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+
+
+class AnalyticsDataInvalid(PredictionApiError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Analytics data is invalid. Rebuild analytics data before serving the API.",
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
+class AnalyticsQueryInvalid(PredictionApiError):
+    def __init__(self, message: str = "Analytics query config is invalid.") -> None:
+        super().__init__(message, HTTPStatus.BAD_REQUEST)
+
+
 def prediction_payload(
     workbook_path: str | Path = DEFAULT_WORKBOOK,
     predictions_path: str | Path = DEFAULT_PREDICTIONS,
@@ -148,6 +199,79 @@ def prediction_payload(
     except OSError as exc:
         raise PredictionDataUnavailable() from exc
     return validate_prediction_payload(raw_payload)
+
+
+def analytics_schema_payload(analytics_path: str | Path = DEFAULT_ANALYTICS) -> AnalyticsSchemaPayload:
+    rows = analytics_rows(analytics_path)
+    return {
+        "dataset": {
+            "id": "analytics_player_season",
+            "grain": "one row per castaway per season",
+            "row_count": len(rows),
+        },
+        "dimensions": [
+            {
+                "id": dimension.id,
+                "label": dimension.label,
+                "column": dimension.column,
+                "labels": dimension.labels or {},
+            }
+            for dimension in DIMENSIONS.values()
+        ],
+        "metrics": [
+            {
+                "id": metric.id,
+                "label": metric.label,
+                "format": metric.format,
+                "minimum_sample_size": metric.minimum_sample_size,
+                "proxy": metric.proxy,
+                "description": metric.description,
+                "warning": metric.warning,
+            }
+            for metric in METRICS.values()
+        ],
+        "filters": [
+            {
+                "field": field,
+                "operators": ["equals", "not_equals", "in", "not_in", "range", "is_true", "is_false"],
+            }
+            for field in sorted(SUPPORTED_FILTER_FIELDS)
+        ],
+        "chart_types": ["bar", "horizontal_bar", "table"],
+    }
+
+
+def analytics_presets_payload() -> AnalyticsPresetsPayload:
+    return {"presets": preset_configs()}
+
+
+def analytics_query_payload(
+    config: object,
+    analytics_path: str | Path = DEFAULT_ANALYTICS,
+) -> AnalyticsQueryPayload:
+    if not isinstance(config, dict):
+        raise AnalyticsQueryInvalid("Analytics query config must be an object.")
+    try:
+        return run_chart_query(analytics_rows(analytics_path), config)
+    except AnalyticsQueryError as exc:
+        raise AnalyticsQueryInvalid(str(exc)) from exc
+
+
+def analytics_rows(analytics_path: str | Path = DEFAULT_ANALYTICS) -> list[dict[str, object]]:
+    path = Path(analytics_path)
+    if not path.exists():
+        raise AnalyticsDataUnavailable()
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = set(reader.fieldnames or [])
+            if not set(ANALYTICS_PLAYER_SEASON_COLUMNS).issubset(fieldnames):
+                raise AnalyticsDataInvalid()
+            return list(reader)
+    except csv.Error as exc:
+        raise AnalyticsDataInvalid() from exc
+    except OSError as exc:
+        raise AnalyticsDataUnavailable() from exc
 
 
 def current_season_payload(payload: PredictionPayload | None = None) -> CurrentSeasonPayload:
@@ -302,6 +426,18 @@ def create_app():
     @app.get("/api/predictions/current", response_model=PredictionResponse)
     def current_predictions() -> PredictionPayload:
         return prediction_payload()
+
+    @app.get("/api/analytics/schema")
+    def analytics_schema() -> AnalyticsSchemaPayload:
+        return analytics_schema_payload()
+
+    @app.get("/api/analytics/presets")
+    def analytics_presets() -> AnalyticsPresetsPayload:
+        return analytics_presets_payload()
+
+    @app.post("/api/analytics/query")
+    def analytics_query(config: object = Body(...)) -> AnalyticsQueryPayload:
+        return analytics_query_payload(config)
 
     return app
 
