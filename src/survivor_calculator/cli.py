@@ -7,6 +7,7 @@ import csv
 import sys
 from pathlib import Path
 
+from survivor_calculator.analytics import build_player_season_rows, export_player_season_rows
 from survivor_calculator.baseline import (
     MODEL_NAME_ALIASES,
     build_predictions,
@@ -96,6 +97,8 @@ def _build(workbook: Path, output_dir: Path, model_name: str, evaluation_strateg
     print(f"Exported {len(exported)} clean CSV tables.")
 
     tables = load_core_tables(workbook)
+    analytics_rows = build_player_season_rows(tables)
+    analytics_path = export_player_season_rows(analytics_rows, output_dir / "analytics_player_season.csv")
     features = build_features(tables)
     _write_feature_rows(features.historical_rows, output_dir / "historical_episode_states.csv")
     _write_feature_rows(features.current_rows, output_dir / "current_episode_state.csv")
@@ -114,6 +117,7 @@ def _build(workbook: Path, output_dir: Path, model_name: str, evaluation_strateg
     print(f"Active players: {len(features.current_rows)}")
     print(f"Model: {model_name}")
     print(f"Evaluation strategy: {evaluation_strategy}")
+    print(f"Wrote analytics dataset: {analytics_path}")
     print(f"Wrote SOC mapping: {soc_path}")
     print(f"Wrote predictions: {predictions_path}")
     print(f"Wrote dashboard: {dashboard_path}")
