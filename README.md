@@ -63,6 +63,8 @@ uvicorn survivor_calculator.api:app --reload
 
 ## Optional Frontend
 
+For prepared public hosting, see [FREE_DEPLOYMENT.md](FREE_DEPLOYMENT.md) for a Netlify frontend and Vercel Hobby API, or [PUBLIC_DEPLOYMENT_GUIDE.md](PUBLIC_DEPLOYMENT_GUIDE.md) for paid Render API hosting. Current checks and remaining public-release requirements are in [DEPLOYMENT_CHECKS.md](DEPLOYMENT_CHECKS.md).
+
 The frontend is a Next.js app under `frontend/`. It expects the API above to be running locally.
 
 ```powershell

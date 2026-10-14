@@ -1,5 +1,7 @@
 # Survivor Calculator: Netlify setup guide
 
+> Superseded by [PUBLIC_DEPLOYMENT_GUIDE.md](PUBLIC_DEPLOYMENT_GUIDE.md). Use that guide for a fresh deployment with direct data uploads and checks at each stage.
+
 This guide matches the repository inspected on October 14, 2026. It explains how to fix the root-page 404 and how to get predictions and interactive analytics working online. The hosting steps and code examples below are instructions for you to apply; they have not been deployed for you.
 
 ## 1. Fix the Netlify 404 first

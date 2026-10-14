@@ -427,15 +427,17 @@ def create_app():
     def current_predictions() -> PredictionPayload:
         return prediction_payload()
 
-    @app.get("/api/analytics/schema")
+    # Payload functions validate these dictionaries. Disable inferred response
+    # models because Python 3.11 typing.TypedDict is unsupported by Pydantic v2.
+    @app.get("/api/analytics/schema", response_model=None)
     def analytics_schema() -> AnalyticsSchemaPayload:
         return analytics_schema_payload()
 
-    @app.get("/api/analytics/presets")
+    @app.get("/api/analytics/presets", response_model=None)
     def analytics_presets() -> AnalyticsPresetsPayload:
         return analytics_presets_payload()
 
-    @app.post("/api/analytics/query")
+    @app.post("/api/analytics/query", response_model=None)
     def analytics_query(config: object = Body(...)) -> AnalyticsQueryPayload:
         return analytics_query_payload(config)
 
