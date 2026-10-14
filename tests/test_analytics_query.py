@@ -82,8 +82,45 @@ class AnalyticsQueryTests(unittest.TestCase):
         self.assertEqual(by_label["Teacher"]["suppressed_reason"], "Minimum sample size is 2.")
         self.assertEqual(result["metadata"]["suppressed_row_count"], 1)
         self.assertTrue(result["metadata"]["metric"]["proxy"])
-        self.assertIn("not be interpreted as direct measurements", result["metadata"]["warnings"][0])
+        self.assertIn("does not measure relationships", result["metadata"]["warnings"][0])
         self.assertEqual(result["rows"][-1]["label"], "Teacher")
+
+    def test_social_proxy_excludes_rows_without_recorded_vote_activity(self) -> None:
+        rows = [
+            _row("Engineer", "25_34", True, 3, 2, 1, 1, 0),
+            _row("Engineer", "25_34", False, 1, 1, 1, 0, 2),
+            {
+                **_row("Engineer", "25_34", False, 1, 0, 0, 0, 0),
+                "castaway_id": "Engineer-no-vote-activity",
+                "votes_cast_total": 0,
+            },
+        ]
+
+        result = run_chart_query(
+            rows,
+            {
+                "dimension": "occupation",
+                "metric": "social_proxy_no_votes_rate",
+                "minimum_sample_size": 1,
+            },
+        )
+
+        row = result["rows"][0]
+        self.assertEqual(row["count"], 3)
+        self.assertEqual(row["sample_size"], 2)
+        self.assertAlmostEqual(row["value"], 0.5)
+
+    def test_rate_metrics_explain_when_no_supported_observations_exist(self) -> None:
+        result = run_chart_query(
+            [{**_row("Engineer", "25_34", False, 0, 0, 0, 0, 0), "votes_cast_total": 0}],
+            {
+                "dimension": "occupation",
+                "metric": "social_proxy_no_votes_rate",
+                "minimum_sample_size": 1,
+            },
+        )
+
+        self.assertEqual(result["rows"][0]["suppressed_reason"], "No supported observations for this metric.")
 
     def test_validates_unsupported_dimension(self) -> None:
         with self.assertRaisesRegex(AnalyticsQueryError, "Unsupported dimension"):

@@ -115,17 +115,18 @@ METRICS = {
         minimum_sample_size=5,
         proxy=True,
         description=(
-            "Share of castaway-season rows where the player received zero counted votes. "
-            "This is a voting-record proxy, not a direct measure of social performance."
+            "Share of castaway-season records with vote activity where the player received zero "
+            "counted votes. This is a vote-record proxy, not a direct measure of social performance."
         ),
         warning=(
-            "Social performance proxy metrics are based on vote-history signals and should not "
-            "be interpreted as direct measurements of social skill."
+            "Social performance proxy: this vote-history signal does not measure relationships, "
+            "influence, strategic agency, or jury management."
         ),
         compute=lambda rows, minimum: _rate_from_condition(
             rows,
             lambda row: _number(row.get("votes_received_total")) == 0,
             minimum,
+            _has_recorded_vote_activity,
         ),
     ),
 }
@@ -441,10 +442,10 @@ def _rate_from_sums(
 ) -> tuple[float | None, int, str | None]:
     numerator = sum(_number(row.get(numerator_column)) or 0.0 for row in rows)
     denominator = sum(_number(row.get(denominator_column)) or 0.0 for row in rows)
-    if denominator < minimum_sample_size:
-        return None, int(denominator), f"Minimum sample size is {minimum_sample_size}."
     if denominator == 0:
         return None, 0, "No supported observations for this metric."
+    if denominator < minimum_sample_size:
+        return None, int(denominator), f"Minimum sample size is {minimum_sample_size}."
     return numerator / denominator, int(denominator), None
 
 
@@ -452,12 +453,23 @@ def _rate_from_condition(
     rows: list[dict[str, object]],
     predicate: Callable[[dict[str, object]], bool],
     minimum_sample_size: int,
+    observation_predicate: Callable[[dict[str, object]], bool] | None = None,
 ) -> tuple[float | None, int, str | None]:
-    denominator = len(rows)
+    observations = [row for row in rows if observation_predicate is None or observation_predicate(row)]
+    denominator = len(observations)
+    if denominator == 0:
+        return None, 0, "No supported observations for this metric."
     if denominator < minimum_sample_size:
         return None, denominator, f"Minimum sample size is {minimum_sample_size}."
-    numerator = sum(1 for row in rows if predicate(row))
+    numerator = sum(1 for row in observations if predicate(row))
     return numerator / denominator, denominator, None
+
+
+def _has_recorded_vote_activity(row: dict[str, object]) -> bool:
+    return any(
+        (_number(row.get(column)) or 0.0) > 0
+        for column in ("votes_cast_total", "votes_received_total")
+    )
 
 
 def _count_true(rows: list[dict[str, object]], column: str) -> int:

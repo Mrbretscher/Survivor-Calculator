@@ -1,3 +1,5 @@
+import AnalyticsPanel from "./analytics-panel";
+
 type Player = {
   castaway_id: string;
   castaway: string;
@@ -195,6 +197,8 @@ export default async function Home() {
           </table>
         </div>
       </section>
+
+      <AnalyticsPanel />
 
       <section className="section" aria-labelledby="evaluation-title">
         <div className="sectionHeader">

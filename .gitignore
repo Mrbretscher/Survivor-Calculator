@@ -12,6 +12,8 @@ outputs/
 survivoR.xlsx
 api-server.log
 api-server.err.log
+analytics-api.log
+analytics-api.err.log
 dev-server.log
 dev-server.err.log
 
@@ -21,4 +23,5 @@ frontend/out/
 frontend/dev-server.log
 frontend/dev-server.err.log
 frontend/.env.local
+frontend/tsconfig.tsbuildinfo
 
