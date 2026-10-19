@@ -129,7 +129,7 @@ export default async function Home() {
                   <p className="rank">Rank {player.rank}</p>
                   <h3 id={`player-${player.castaway_id}`}>{player.castaway}</h3>
                 </div>
-                <span className="tribe">{player.tribe}</span>
+                <span className="tribe" data-tribe={player.tribe.trim().toLowerCase()}>{player.tribe}</span>
               </div>
               <dl className="playerMeta">
                 <div>
