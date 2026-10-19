@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
+import re
 from http import HTTPStatus
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -176,6 +178,75 @@ class AnalyticsDataInvalid(PredictionApiError):
 class AnalyticsQueryInvalid(PredictionApiError):
     def __init__(self, message: str = "Analytics query config is invalid.") -> None:
         super().__init__(message, HTTPStatus.BAD_REQUEST)
+
+
+class PlayerNotFound(PredictionApiError):
+    def __init__(self) -> None:
+        super().__init__("Contestant is not on the current prediction board.", HTTPStatus.NOT_FOUND)
+
+
+PROFILE_STAT_FIELDS = (
+    "age", "challenge_appearances_total", "challenge_wins_total",
+    "team_challenge_appearances_total", "team_challenge_wins_total",
+    "individual_immunity_appearances_total", "individual_immunity_wins_total",
+    "votes_received_total", "votes_cast_total", "confessionals_total", "confessional_time_total",
+)
+
+
+def player_profile_payload(
+    castaway_id: str,
+    predictions_path: str | Path = DEFAULT_PREDICTIONS,
+    analytics_path: str | Path = DEFAULT_ANALYTICS,
+) -> dict[str, object]:
+    """Join an active player's forecast to recorded current-US-season totals.
+
+    No data is generated on request. Missing or malformed counts stay unknown;
+    totals cover available snapshot records, including recorded voting rounds.
+    Analytics failures leave the validated forecast usable with an explicit status.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", castaway_id):
+        raise PlayerNotFound()
+    predictions = prediction_payload(predictions_path=predictions_path)
+    player = next((row for row in predictions["players"] if row["castaway_id"] == castaway_id), None)
+    if player is None:
+        raise PlayerNotFound()
+    season = predictions["metadata"]["current_season"]
+    try:
+        matches = [
+            row for row in analytics_rows(analytics_path)
+            if row.get("castaway_id") == castaway_id
+            and str(row.get("season")) == str(season)
+            and (row.get("version") or "US") == "US"
+            and (row.get("version_season") or f"US{season}") == f"US{season}"
+        ]
+    except (AnalyticsDataUnavailable, AnalyticsDataInvalid):
+        matches = []
+    # Duplicate identities are ambiguous: do not pick or sum an arbitrary row.
+    row = matches[0] if len(matches) == 1 else None
+    return {
+        "metadata": {key: predictions["metadata"][key] for key in (
+            "current_season", "latest_episode", "generated_at", "disclaimer",
+        )},
+        "player": player,
+        "stats_status": "available" if row is not None else "unavailable",
+        "stats": {field: _profile_number(row.get(field)) if row is not None else None for field in PROFILE_STAT_FIELDS},
+        "notes": [
+            "Observed totals describe available records in this saved snapshot; missing source coverage can affect totals.",
+            "Votes cast include recorded voting rounds; votes received exclude votes recorded as nullified.",
+            "Confessionals describe edited screen time, not social influence or jury support.",
+        ],
+    }
+
+
+def _profile_number(value: object) -> float | None:
+    """Preserve absent, invalid and negative statistics as unknown."""
+    if value is None or isinstance(value, bool) or str(value).strip() == "":
+        return None
+    try:
+        number = float(str(value))
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
 
 
 def prediction_payload(
@@ -430,6 +501,10 @@ def create_app():
     @app.get("/api/predictions/current", response_model=PredictionResponse)
     def current_predictions() -> PredictionPayload:
         return prediction_payload()
+
+    @app.get("/api/players/{castaway_id}", response_model=None)
+    def player_profile(castaway_id: str) -> dict[str, object]:
+        return player_profile_payload(castaway_id)
 
     # Payload functions validate these dictionaries. Disable inferred response
     # models because Python 3.11 typing.TypedDict is unsupported by Pydantic v2.

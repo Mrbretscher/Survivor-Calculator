@@ -20,6 +20,7 @@ from survivor_calculator.api import (
     current_season_payload,
     error_payload,
     prediction_payload,
+    player_profile_payload,
 )
 
 
@@ -41,6 +42,11 @@ class SurvivorApiHandler(BaseHTTPRequestHandler):
             if path == "/api/current-season":
                 payload = prediction_payload(DEFAULT_WORKBOOK, DEFAULT_PREDICTIONS)
                 self._send_json(current_season_payload(payload))
+                return
+            if path.startswith("/api/players/"):
+                self._send_json(player_profile_payload(
+                    path.removeprefix("/api/players/"), DEFAULT_PREDICTIONS, DEFAULT_ANALYTICS,
+                ))
                 return
             if path == "/api/analytics/schema":
                 self._send_json(analytics_schema_payload(DEFAULT_ANALYTICS))

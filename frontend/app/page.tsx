@@ -1,29 +1,7 @@
+import Link from "next/link";
 import AnalyticsPanel from "./analytics-panel";
-
-type Player = {
-  castaway_id: string;
-  castaway: string;
-  tribe: string;
-  original_tribe: string;
-  tribe_status: string;
-  tribe_status_display: string;
-  occupation: string;
-  soc_code: string;
-  soc_title: string;
-  soc_major_group: string;
-  raw_next_boot_risk: number;
-  next_boot_probability: number;
-  winner_probability: number;
-  explanation: string[];
-};
-
-type ProjectedBoot = {
-  projected_order: number;
-  projected_final_n_before_boot: number;
-  castaway_id: string;
-  castaway: string;
-  projected_boot_probability: number;
-};
+import PlayerBoard from "./player-board";
+import { API_BASE, contestantHref, getPredictions } from "../lib/predictions";
 
 type EvaluationComparison = {
   name: string;
@@ -43,39 +21,6 @@ type CalibrationBin = {
   absolute_error: number;
 };
 
-type PredictionPayload = {
-  metadata: {
-    generated_at: string;
-    model_name: string;
-    model_selection_policy: string;
-    source_workbook: string;
-    current_season: number;
-    latest_episode: number;
-    latest_final_n: number;
-    active_players: number;
-    disclaimer: string;
-  };
-  players: Player[];
-  projected_boot_order: ProjectedBoot[];
-  evaluation: Record<string, unknown>;
-};
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
-
-async function getPredictions(): Promise<PredictionPayload | null> {
-  try {
-    const response = await fetch(`${API_BASE}/api/predictions/current`, {
-      next: { revalidate: 60 }
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return response.json();
-  } catch {
-    return null;
-  }
-}
-
 export default async function Home() {
   const payload = await getPredictions();
 
@@ -84,7 +29,6 @@ export default async function Home() {
   }
 
   const evaluation = normalizeEvaluation(payload.evaluation);
-  const board = payload.players.map((player, index) => ({ ...player, rank: index + 1 }));
   const highestBoot = payload.projected_boot_order[0];
 
   return (
@@ -104,99 +48,13 @@ export default async function Home() {
           <SummaryStat label="Model" value={formatModelName(payload.metadata.model_name)} />
           <SummaryStat
             label="Highest boot risk"
-            value={highestBoot ? `${highestBoot.castaway} ${formatPercent(highestBoot.projected_boot_probability)}` : "Unavailable"}
+            value={highestBoot ? <Link className="contestantLink" href={contestantHref(highestBoot.castaway_id)}>{highestBoot.castaway} {formatPercent(highestBoot.projected_boot_probability)}</Link> : "Unavailable"}
           />
           <SummaryStat label="Generated" value={formatDateTime(payload.metadata.generated_at)} />
         </dl>
       </header>
 
-      <section className="section" id="current-board" aria-labelledby="current-board-title">
-        <div className="sectionHeader">
-          <div>
-            <p className="eyebrow">Current Board</p>
-            <h2 id="current-board-title">Winner and next-boot probabilities</h2>
-          </div>
-          <p className="sectionNote">
-            Ranking reflects the latest generated prediction file.
-          </p>
-        </div>
-
-        <div className="playerGrid">
-          {board.map((player) => (
-            <article className="playerCard" key={player.castaway_id} aria-labelledby={`player-${player.castaway_id}`}>
-              <div className="playerHeader">
-                <div>
-                  <p className="rank">Rank {player.rank}</p>
-                  <h3 id={`player-${player.castaway_id}`}>{player.castaway}</h3>
-                </div>
-                <span className="tribe" data-tribe={player.tribe.trim().toLowerCase()}>{player.tribe}</span>
-              </div>
-              <dl className="playerMeta">
-                <div>
-                  <dt>Tribe status</dt>
-                  <dd>{player.tribe_status_display}</dd>
-                </div>
-                {player.tribe_status_display === "Swapped" ? (
-                  <div>
-                    <dt>Original tribe</dt>
-                    <dd>{player.original_tribe}</dd>
-                  </div>
-                ) : null}
-                <div>
-                  <dt>Occupation</dt>
-                  <dd>{player.occupation || "Under review"}</dd>
-                </div>
-                <div>
-                  <dt>SOC title</dt>
-                  <dd>{formatSocTitle(player)}</dd>
-                </div>
-                <div>
-                  <dt>SOC major group</dt>
-                  <dd>{player.soc_major_group || "Manual review"}</dd>
-                </div>
-              </dl>
-              <div className="metricsRow">
-                <ProbabilityMeter label="Winner" value={player.winner_probability} tone="positive" />
-                <ProbabilityMeter label="Next boot" value={player.next_boot_probability} tone="risk" />
-              </div>
-              <p className="signal">{player.explanation.length ? player.explanation.join(" ") : "No model signal notes available."}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="section splitSection" aria-labelledby="boot-order-title">
-        <div className="sectionHeader">
-          <div>
-            <p className="eyebrow">Projection</p>
-            <h2 id="boot-order-title">Projected boot order</h2>
-          </div>
-          <p className="sectionNote">Boot order is a ranked view of the current next-boot probabilities.</p>
-        </div>
-
-        <div className="tableFrame" role="region" aria-label="Projected boot order table" tabIndex={0}>
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Order</th>
-                <th scope="col">Castaway</th>
-                <th scope="col">Final N before boot</th>
-                <th scope="col">Boot probability</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payload.projected_boot_order.map((row) => (
-                <tr key={row.castaway_id}>
-                  <td>{row.projected_order}</td>
-                  <th scope="row">{row.castaway}</th>
-                  <td>{row.projected_final_n_before_boot}</td>
-                  <td>{formatPercent(row.projected_boot_probability)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <PlayerBoard players={payload.players} bootOrder={payload.projected_boot_order} />
 
       <AnalyticsPanel />
 
@@ -319,7 +177,7 @@ function UnavailableDashboard({ apiBase }: { apiBase: string }) {
   );
 }
 
-function SummaryStat({ label, value }: { label: string; value: string }) {
+function SummaryStat({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="summaryStat">
       <dt>{label}</dt>
@@ -333,28 +191,6 @@ function Detail({ label, value }: { label: string; value: string }) {
     <div>
       <dt>{label}</dt>
       <dd>{value}</dd>
-    </div>
-  );
-}
-
-function ProbabilityMeter({ label, value, tone }: { label: string; value: number; tone: "positive" | "risk" }) {
-  const percent = Math.round(value * 1000) / 10;
-  return (
-    <div className="probability">
-      <div>
-        <span>{label}</span>
-        <strong>{formatPercent(value)}</strong>
-      </div>
-      <div
-        className={`meter meter-${tone}`}
-        role="meter"
-        aria-label={`${label}: ${formatPercent(value)}`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent}
-      >
-        <span style={{ width: `${Math.max(1, percent)}%` }} />
-      </div>
     </div>
   );
 }
@@ -484,11 +320,4 @@ function formatDateTime(value: string): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(date);
-}
-
-function formatSocTitle(player: Player): string {
-  if (!player.soc_title) {
-    return "Manual review";
-  }
-  return player.soc_code ? `${player.soc_title} (${player.soc_code})` : player.soc_title;
 }

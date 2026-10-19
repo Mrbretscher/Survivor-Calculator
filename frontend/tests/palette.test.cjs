@@ -3,7 +3,7 @@ const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
 const { renderToStaticMarkup } = require("react-dom/server");
-const ts = require("typescript");
+const createLoader = require("./load-ts.cjs");
 
 const appPath = path.join(__dirname, "../app");
 const css = readFileSync(path.join(appPath, "styles.css"), "utf8");
@@ -41,10 +41,6 @@ test("probability meters remain distinguishable from their tracks", () => {
 });
 
 test("rendered badges follow current tribes, normalize casing and preserve unknown labels", async () => {
-  const source = ts.transpileModule(readFileSync(path.join(appPath, "page.tsx"), "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 }
-  }).outputText;
-  const module = { exports: {} };
   const fetchPredictions = async () => ({
     ok: true,
     json: async () => ({
@@ -60,11 +56,8 @@ test("rendered badges follow current tribes, normalize casing and preserve unkno
       evaluation: {}, projected_boot_order: []
     })
   });
-  new Function("require", "module", "exports", "fetch", source)(
-    (name) => name === "./analytics-panel" ? { default: () => null } : require(name),
-    module, module.exports, fetchPredictions
-  );
-  const markup = renderToStaticMarkup(await module.exports.default());
+  const Home = createLoader({ fetch: fetchPredictions, view: "all" })("../app/page.tsx").default;
+  const markup = renderToStaticMarkup(await Home());
   const badges = [...markup.matchAll(/<span class="tribe" data-tribe="([^"]*)">([^<]*)<\/span>/g)];
   assert.deepEqual(badges.map((match) => match[1]), ["dina", "savu", "toka", "future tribe"]);
   assert.deepEqual(badges.map((match) => match[2]), ["Dina", " SAVU ", "Toka", "Future tribe"]);
