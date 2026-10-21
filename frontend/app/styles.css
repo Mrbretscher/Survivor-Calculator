@@ -48,6 +48,64 @@ code {
   place-items: center;
 }
 
+.siteHeader {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.siteHeaderInner {
+  width: min(100%, 1240px);
+  margin: 0 auto;
+  padding: 16px 32px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+}
+
+.siteBrand {
+  color: var(--text);
+  font-size: 1.1rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.siteNav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.siteNav a {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.siteNav a:hover {
+  background: var(--track);
+}
+
+.siteNav a[aria-current] {
+  background: var(--accent-gold);
+  color: var(--surface);
+}
+
+.siteNav a:focus-visible,
+.siteBrand:focus-visible {
+  outline: 3px solid var(--accent-peach);
+  outline-offset: 3px;
+}
+
+.pageIntro {
+  padding: 24px 0 2px;
+}
+
 .skipLink {
   position: absolute;
   left: 16px;
@@ -1038,6 +1096,20 @@ a:focus-visible,
 }
 
 @media (max-width: 680px) {
+  .siteHeaderInner {
+    padding: 16px 20px;
+    gap: 12px;
+  }
+
+  .siteNav {
+    width: 100%;
+  }
+
+  .siteNav a {
+    padding: 10px;
+    font-size: 0.9rem;
+  }
+
   .shell {
     padding: 20px;
   }

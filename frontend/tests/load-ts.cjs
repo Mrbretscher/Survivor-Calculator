@@ -6,7 +6,7 @@ const { jsx } = require("react/jsx-runtime");
 
 // Exercise actual TS/TSX modules using the project's existing compiler and React.
 // Framework navigation is replaced only at the runtime boundary.
-module.exports = function createLoader({ fetch = global.fetch, view } = {}) {
+module.exports = function createLoader({ fetch = global.fetch, view, pathname = "/" } = {}) {
   const cache = new Map();
   function load(filename) {
     const resolved = path.resolve(__dirname, filename);
@@ -30,6 +30,7 @@ module.exports = function createLoader({ fetch = global.fetch, view } = {}) {
           };
         if (name === "next/navigation")
           return {
+            usePathname: () => pathname,
             notFound: () => {
               throw new Error("NEXT_NOT_FOUND");
             }
