@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
 from survivor_calculator.features import FEATURE_COLUMNS, assert_no_leakage_columns, to_float, to_int
 
 EXPERIMENTAL_NEXT_BOOT_MODEL = "experimental_next_boot"
@@ -75,8 +80,9 @@ class ExperimentalNextBootModel:
                     "preprocess",
                     ColumnTransformer(
                         transformers=[
-                            ("numeric", numeric_pipeline, list(NUMERIC_FEATURES)),
-                            ("categorical", categorical_pipeline, list(CATEGORICAL_FEATURES)),
+                            ("numeric", numeric_pipeline, list(range(len(NUMERIC_FEATURES)))),
+                            ("categorical", categorical_pipeline,
+                             list(range(len(NUMERIC_FEATURES), len(NUMERIC_FEATURES) + len(CATEGORICAL_FEATURES)))),
                         ],
                         remainder="drop",
                     ),
@@ -105,14 +111,14 @@ class ExperimentalNextBootModel:
             self._constant_probability = max(min(positives / len(targets), 0.999), 0.001)
             return self
 
-        self._pipeline.fit([_model_row(row) for row in rows], targets)
+        self._pipeline.fit(_model_matrix(rows), targets)
         self._constant_probability = None
         return self
 
     def predict_risk(self, row: dict[str, object]) -> float:
         if self._constant_probability is not None:
             return self._constant_probability
-        probability = float(self._pipeline.predict_proba([_model_row(row)])[0][1])
+        probability = float(self._pipeline.predict_proba(_model_matrix([row]))[0][1])
         return min(max(probability, 0.001), 0.999)
 
 
@@ -197,6 +203,21 @@ class OccupationTextNextBootModel:
             return self._constant_probability
         probability = float(self._pipeline.predict_proba([row])[0][1])
         return min(max(probability, 0.001), 0.999)
+
+
+def _model_matrix(rows: list[dict[str, object]]) -> NDArray:
+    """Convert named features to a stable 2D matrix for ColumnTransformer.
+
+    Object dtype preserves numeric missing values alongside categorical strings.
+    NumPy is part of the existing optional scikit-learn dependency stack; import
+    it only when this optional model is used. Identical ordering is used in fit
+    and prediction, without requiring an additional dataframe dependency.
+    """
+    import numpy as np
+
+    columns = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+    selected = [_model_row(row) for row in rows]
+    return np.asarray([[row[column] for column in columns] for row in selected], dtype=object)
 
 
 def _model_row(row: dict[str, object]) -> dict[str, object]:

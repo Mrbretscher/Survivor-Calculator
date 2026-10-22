@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import random
 from collections import defaultdict
+from collections.abc import Sequence
 from statistics import mean
 from typing import Callable, Protocol
 
@@ -24,6 +25,7 @@ class RiskModel(Protocol):
 RiskScorer = Callable[[dict[str, object]], float]
 
 PRIMARY_MODEL_NAME = "historical_rate_baseline"
+RANKING_METRIC_VERSION = "expected_uniform_exact_ties_v1"
 DEFAULT_HOLDOUT_POOL_SIZE = 10
 DEFAULT_HOLDOUT_SEASONS_PER_POOL = 2
 DEFAULT_HOLDOUT_RANDOM_SEED = 42
@@ -176,6 +178,7 @@ def _evaluate_split(
             "evaluated_candidates": primary["candidates"],
         },
         "primary_model": model_name,
+        "ranking_metric_version": RANKING_METRIC_VERSION,
         "metrics": primary_metrics,
         "baseline_comparisons": [_comparison_row(result) for result in results],
         "probability_quality": probability_quality,
@@ -184,7 +187,7 @@ def _evaluate_split(
             **calibration,
         },
         "notes": [
-            "Top-k metrics are event-level ranking metrics.",
+            "Top-k metrics are expected event-level hits under uniform random ordering within exactly equal scores.",
             "Brier score and calibration are candidate-level probability checks after event-level normalization.",
             "Log loss is the event-level negative log probability assigned to the actual boot.",
             "The historical-rate baseline should remain the default unless a candidate model lowers both holdout log loss and Brier score.",
@@ -234,9 +237,32 @@ def assert_disjoint_season_split(
 def _group_events(rows: list[dict[str, object]]) -> dict[tuple[int, int, int], list[dict[str, object]]]:
     grouped: dict[tuple[int, int, int], list[dict[str, object]]] = defaultdict(list)
     for row in rows:
-        key = (int(row["season"]), int(row["episode"]), int(row["n_boots"]))
+        key = (int(row["season"]), int(row["episode"]), int(row.get("completed_exit_order", row["n_boots"])))
         grouped[key].append(row)
     return grouped
+
+
+def expected_top_k_hit(scores: Sequence[float], actual_index: int, k: int) -> float:
+    """Return expected inclusion of the actual outcome among the top k scores.
+
+    Exactly equal numeric scores share uniformly random rank positions. If h
+    scores are higher and t equal the actual score, its credit is
+    max(0, min(t, k - h)) / t. Distinct scores are never rounded or merged by a
+    tolerance. k=0 gives zero; k>=len(scores) gives one. Inputs must be finite,
+    with a valid outcome index and a non-negative integer k.
+    """
+    if not scores:
+        raise ValueError("Ranking requires at least one candidate score.")
+    if not isinstance(k, int) or isinstance(k, bool) or k < 0:
+        raise ValueError("k must be a non-negative integer.")
+    if not isinstance(actual_index, int) or not 0 <= actual_index < len(scores):
+        raise ValueError("actual_index must identify a candidate score.")
+    if not all(math.isfinite(score) for score in scores):
+        raise ValueError("Ranking scores must all be finite.")
+    actual_score = scores[actual_index]
+    higher = sum(score > actual_score for score in scores)
+    tied = sum(score == actual_score for score in scores)
+    return max(0, min(tied, k - higher)) / tied
 
 
 def _score_events(
@@ -244,8 +270,8 @@ def _score_events(
     scorer: RiskScorer,
     event_groups: dict[tuple[int, int, int], list[dict[str, object]]],
 ) -> dict[str, object]:
-    top1_hits = 0
-    top3_hits = 0
+    top1_hits = 0.0
+    top3_hits = 0.0
     brier_values: list[float] = []
     log_losses: list[float] = []
     actual_probabilities: list[float] = []
@@ -257,18 +283,18 @@ def _score_events(
         actual = [row for row in candidates if row["target_next_boot"] == 1]
         if not actual:
             continue
+        if len(actual) != 1:
+            raise ValueError("Each scored event must have exactly one actual boot.")
         evaluated_events += 1
         probabilities = _event_probabilities(candidates, scorer)
-        ranked = sorted(candidates, key=lambda row: probabilities[id(row)], reverse=True)
-        actual_id = actual[0]["castaway_id"]
         actual_probability = probabilities[id(actual[0])]
         actual_probabilities.append(actual_probability)
         log_losses.append(-math.log(actual_probability))
 
-        if ranked[0]["castaway_id"] == actual_id:
-            top1_hits += 1
-        if any(row["castaway_id"] == actual_id for row in ranked[:3]):
-            top3_hits += 1
+        scores = [probabilities[id(row)] for row in candidates]
+        actual_index = next(index for index, row in enumerate(candidates) if row is actual[0])
+        top1_hits += expected_top_k_hit(scores, actual_index, 1)
+        top3_hits += expected_top_k_hit(scores, actual_index, 3)
 
         for row in candidates:
             target = float(row["target_next_boot"])
@@ -307,6 +333,7 @@ def _metric_sections(result: dict[str, object]) -> dict[str, object]:
         "event_count": result["events"],
         "candidate_count": result["candidates"],
         "ranking": {
+            "tie_handling": RANKING_METRIC_VERSION,
             "top1_accuracy": result["top1_accuracy"],
             "top3_recall": result["top3_recall"],
         },
@@ -418,3 +445,65 @@ def _to_float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def evaluate_relationship_diagnostics(
+    rows: list[dict[str, object]], model_factory: Callable[[], RiskModel], *,
+    model_name: str, comparison_model_factories: dict[str, Callable[[], RiskModel]],
+    holdout_seasons: list[int], random_seed: int = 42, bootstrap_samples: int = 1000,
+) -> dict[str, object]:
+    """Score full events in predefined slices and bootstrap paired season blocks.
+
+    Use the same earlier-season training cutoff as the primary chronological
+    comparison. This exploratory reused holdout does not tune model settings.
+    """
+    if bootstrap_samples <= 0:
+        raise ValueError("bootstrap_samples must be positive.")
+    if not holdout_seasons:
+        return {"status": "skipped", "reason": "No chronological holdout available."}
+    train = [r for r in rows if int(r["season"]) < min(holdout_seasons)]
+    test = [r for r in rows if int(r["season"]) in holdout_seasons]
+    groups = _group_events(test)
+    def report(selected: list[dict[str, object]]) -> dict[str, object]:
+        if not selected:
+            return {"status": "skipped", "reason": "No eligible events in this slice."}
+        result = _evaluate_split(train, selected, model_factory, model_name=model_name,
+                                 comparison_model_factories=comparison_model_factories,
+                                 split={"holdout_seasons": holdout_seasons, "strategy": "same_chronological_training_cutoff"})
+        if result["status"] != "ok":
+            return result
+        return {"status": "ok", "candidates": result["split"]["evaluated_candidates"],
+                "baseline_comparisons": result["baseline_comparisons"]}
+    slices = {}
+    for label, predicate in {
+        "swapped": lambda event: any(r.get("tribe_status_display") == "Swapped" for r in event),
+        "merged": lambda event: all(r.get("tribe_status_display") == "Merged" for r in event),
+        "sparse_relationship_history": lambda event: sum(float(r.get("social_known_pair_fraction") or 0) for r in event) / len(event) < 0.25,
+    }.items():
+        slices[label] = report([r for event in groups.values() if predicate(event) for r in event])
+    by_season = {str(s): report([r for r in test if int(r["season"]) == s]) for s in holdout_seasons}
+    usable = [r for r in by_season.values() if r["status"] == "ok"]
+    intervals = {}
+    if usable and PRIMARY_MODEL_NAME in comparison_model_factories:
+        generator = random.Random(random_seed)
+        deltas = {"log_loss": [], "brier_score": []}
+        for _ in range(bootstrap_samples):
+            sample = generator.choices(usable, k=len(usable))
+            for metric in deltas:
+                numerator = denominator = 0.0
+                for season in sample:
+                    compared = {r["name"]: r for r in season["baseline_comparisons"]}
+                    weight = compared[model_name]["events"] if metric == "log_loss" else season["candidates"]
+                    numerator += (compared[model_name][metric] - compared[PRIMARY_MODEL_NAME][metric]) * weight
+                    denominator += weight
+                deltas[metric].append(numerator / denominator)
+        for metric, values in deltas.items():
+            values.sort()
+            intervals[metric + "_delta_vs_baseline_95pct"] = [values[int(0.025 * len(values))], values[min(len(values) - 1, int(0.975 * len(values)))]]
+    return {"status": "ok", "slices": slices, "per_season": by_season,
+            "season_block_bootstrap": {"seed": random_seed, "samples": bootstrap_samples,
+                                        "intervals": intervals},
+            "notes": ["Exploratory comparison on a previously inspected holdout; no automatic promotion.",
+                      "Slices preserve every candidate in each selected event.",
+                      "Bootstrap resamples whole seasons; five seasons give limited uncertainty evidence.",
+                      "Negative metric differences favor the social model; intervals spanning zero are inconclusive."]}

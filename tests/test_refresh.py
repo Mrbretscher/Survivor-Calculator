@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from fixtures import minimal_core_tables
 from survivor_calculator.cli import build_from_tables, main
-from survivor_calculator.api import prediction_payload
+from survivor_calculator.api import prediction_payload, timeline_payload
 from survivor_calculator.deployment_bundle import prepare_bundle
 from survivor_calculator.refresh import COMMIT_URL, normalize_table, refresh, us_model_tables
 
@@ -54,6 +54,13 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(payload["metadata"]["source_workbook"], "upstream-json (no workbook)")
         served = prediction_payload(predictions_path=self.output / "current_predictions.json")
         self.assertEqual(served["metadata"]["source_data"]["commit"], self.commit)
+        timeline = timeline_payload(self.output / "current_predictions.json")
+        self.assertEqual(timeline["metadata"]["source_data"]["commit"], self.commit)
+        self.assertEqual(timeline["states"][0]["season"], 2)
+        relationships = json.loads((self.output / "current_relationships.json").read_text())
+        self.assertEqual(relationships["source_data"]["commit"], self.commit)
+        manifest = json.loads((self.output / "refresh_manifest.json").read_text())
+        self.assertIn("current_relationships.json", manifest["output_sha256"])
         self.assertEqual(len(payload["players"]), 2)
         self.assertEqual((self.output / "current_predictions.json").read_bytes(), before)
 

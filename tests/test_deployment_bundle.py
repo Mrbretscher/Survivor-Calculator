@@ -11,6 +11,7 @@ from survivor_calculator.analytics import build_player_season_rows, export_playe
 from survivor_calculator.baseline import build_predictions, save_predictions
 from survivor_calculator.deployment_bundle import prepare_bundle
 from survivor_calculator.features import build_features
+from survivor_calculator.api import timeline_payload
 
 
 class DeploymentBundleTests(unittest.TestCase):
@@ -28,6 +29,8 @@ class DeploymentBundleTests(unittest.TestCase):
             manifest = json.loads(prepare_bundle(repository, data, output).read_text(encoding="utf-8"))
             self.assertEqual(manifest["analytics_rows"], 4)
             self.assertEqual(manifest["players"], 2)
+            timeline = timeline_payload(output / "data/processed/current_predictions.json")
+            self.assertEqual(timeline["states"][0]["season"], 2)
             for name, checksum in manifest["files"].items():
                 self.assertEqual(hashlib.sha256((output / name).read_bytes()).hexdigest(), checksum)
             self.assertFalse(any(path.name in {".env", "survivoR.xlsx", "node_modules"} for path in output.rglob("*")))

@@ -51,6 +51,17 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(payload, {"status": "ok"})
 
+    def test_timeline_index_and_exact_checkpoint(self) -> None:
+        status, payload = self._get_json("/api/predictions/timeline")
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["states"][0]["season"], 2)
+        status, payload = self._get_json("/api/predictions/timeline/2/2/0")
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["metadata"]["latest_episode"], 2)
+        self.assertEqual(payload["timeline_context"]["checkpoint"], 0)
+        status, _ = self._get_json("/api/predictions/timeline/1/1/0")
+        self.assertEqual(status, HTTPStatus.NOT_FOUND)
+
     def test_current_season_endpoint_returns_validated_summary(self) -> None:
         status, payload = self._get_json("/api/current-season")
 

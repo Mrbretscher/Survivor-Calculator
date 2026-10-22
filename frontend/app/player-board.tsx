@@ -13,10 +13,12 @@ import {
 
 export default function PlayerBoard({
   players,
-  bootOrder
+  bootOrder,
+  historical = false
 }: {
   players: Player[];
   bootOrder: ProjectedBoot[];
+  historical?: boolean;
 }) {
   const [view, setView] = useState<"tribe" | "all">("tribe");
   const board = players.map((player, index) => ({
@@ -34,13 +36,13 @@ export default function PlayerBoard({
       >
         <div className="sectionHeader">
           <div>
-            <p className="eyebrow">Current board</p>
+            <p className="eyebrow">{historical ? "Timeline board" : "Current board"}</p>
             <h2 id="current-board-title">Winner and next-boot probabilities</h2>
           </div>
           <ViewToggle view={view} onChange={setView} label="Board grouping" />
         </div>
         <p className="boardNote">
-          View contestants and boot order by current tribe or together.
+          View contestants and boot order by tribe at this checkpoint or together.
           Percentages use the full active cast.
         </p>
         <div id="contestant-board">
@@ -58,7 +60,7 @@ export default function PlayerBoard({
                 />
                 <div className="playerGrid">
                   {group.rows.map((player) => (
-                    <PlayerCard key={player.castaway_id} player={player} />
+                    <PlayerCard key={player.castaway_id} player={player} historical={historical} />
                   ))}
                 </div>
               </section>
@@ -66,7 +68,7 @@ export default function PlayerBoard({
           ) : (
             <div className="playerGrid">
               {board.map((player) => (
-                <PlayerCard key={player.castaway_id} player={player} />
+                <PlayerCard key={player.castaway_id} player={player} historical={historical} />
               ))}
             </div>
           )}
@@ -105,11 +107,11 @@ export default function PlayerBoard({
                 count={group.rows.length}
                 id={`boot-tribe-${index}`}
               />
-              <BootTable rows={group.rows} tribe={group.tribe} />
+              <BootTable rows={group.rows} tribe={group.tribe} historical={historical} />
             </section>
           ))
         ) : (
-          <BootTable rows={bootOrder} />
+          <BootTable rows={bootOrder} historical={historical} />
         )}
       </section>
     </>
@@ -168,7 +170,7 @@ function TribeHeading({
   );
 }
 
-export function PlayerCard({ player }: { player: Player & { rank: number } }) {
+export function PlayerCard({ player, historical = false }: { player: Player & { rank: number }; historical?: boolean }) {
   return (
     <article
       className="playerCard"
@@ -178,12 +180,12 @@ export function PlayerCard({ player }: { player: Player & { rank: number } }) {
         <div>
           <p className="rank">Overall board position {player.rank}</p>
           <h3 id={`player-${player.castaway_id}`}>
-            <Link
+            {historical ? player.castaway : <Link
               className="contestantLink"
               href={contestantHref(player.castaway_id)}
             >
               {player.castaway}
-            </Link>
+            </Link>}
           </h3>
         </div>
         <span className="tribe" data-tribe={player.tribe.trim().toLowerCase()}>
@@ -235,9 +237,9 @@ export function PlayerCard({ player }: { player: Player & { rank: number } }) {
           ? player.explanation.join(" ")
           : "No model signal notes available."}
       </p>
-      <Link className="profileLink" href={contestantHref(player.castaway_id)}>
+      {!historical && <Link className="profileLink" href={contestantHref(player.castaway_id)}>
         View contestant profile <span aria-hidden="true">→</span>
-      </Link>
+      </Link>}
     </article>
   );
 }
@@ -274,10 +276,12 @@ export function ProbabilityMeter({
 
 export function BootTable({
   rows,
-  tribe
+  tribe,
+  historical = false
 }: {
   rows: ProjectedBoot[];
   tribe?: string;
+  historical?: boolean;
 }) {
   return (
     <div
@@ -306,12 +310,12 @@ export function BootTable({
             <tr key={row.castaway_id}>
               <td>{tribe ? index + 1 : row.projected_order}</td>
               <th scope="row">
-                <Link
+                {historical ? row.castaway : <Link
                   className="contestantLink"
                   href={contestantHref(row.castaway_id)}
                 >
                   {row.castaway}
-                </Link>
+                </Link>}
               </th>
               <td>
                 {tribe

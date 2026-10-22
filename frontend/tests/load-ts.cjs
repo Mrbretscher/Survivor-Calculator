@@ -6,7 +6,7 @@ const { jsx } = require("react/jsx-runtime");
 
 // Exercise actual TS/TSX modules using the project's existing compiler and React.
 // Framework navigation is replaced only at the runtime boundary.
-module.exports = function createLoader({ fetch = global.fetch, view, pathname = "/" } = {}) {
+module.exports = function createLoader({ fetch = global.fetch, view, pathname = "/", hooks } = {}) {
   const cache = new Map();
   function load(filename) {
     const resolved = path.resolve(__dirname, filename);
@@ -35,7 +35,9 @@ module.exports = function createLoader({ fetch = global.fetch, view, pathname = 
               throw new Error("NEXT_NOT_FOUND");
             }
           };
-        if (name === "react" && view)
+        if (name === "react" && hooks && resolved.endsWith("prediction-explorer.tsx"))
+          return { ...localRequire(name), ...hooks };
+        if (name === "react" && view && resolved.endsWith("player-board.tsx"))
           return { ...localRequire(name), useState: () => [view, () => {}] };
         if (name === "./analytics-panel") return { default: () => null };
         if (name.startsWith(".")) {

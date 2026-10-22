@@ -125,6 +125,8 @@ class PredictionMetadataResponse(BaseModel):  # type: ignore[misc]
     latest_final_n: int
     active_players: int
     disclaimer: str
+    training_seasons: list[int] | None = None
+    training_policy: str | None = None
 
 
 class PredictionResponse(BaseModel):  # type: ignore[misc]
@@ -273,6 +275,96 @@ def prediction_payload(
     return validate_prediction_payload(raw_payload)
 
 
+def timeline_payload(
+    predictions_path: str | Path = DEFAULT_PREDICTIONS,
+    *,
+    season: int | None = None,
+    episode: int | None = None,
+    checkpoint: int | None = None,
+) -> dict[str, object]:
+    """Read prepared unseen-season checkpoints; never train or read raw tables.
+
+    The index omits full player distributions. A detail request must identify
+    an exact checkpoint; missing/unavailable states return 404, never a fallback.
+    """
+    try:
+        raw = json.loads(Path(predictions_path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise PredictionDataUnavailable() from exc
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise PredictionDataInvalid() from exc
+    current = validate_prediction_payload(raw)
+    timeline = raw.get("timeline")
+    if timeline is None:
+        raise PredictionApiError("Timeline is unavailable. Rebuild predictions to enable it.", HTTPStatus.SERVICE_UNAVAILABLE)
+    try:
+        timeline = _required_mapping(timeline, "timeline")
+        if timeline.get("version") != 1:
+            raise ValueError("Unsupported Timeline version")
+        note = _required_string(timeline, "note")
+        metadata = current["metadata"]
+        training = metadata.get("training_seasons")
+        if not isinstance(training, list):
+            raise ValueError("Missing training provenance")
+        last_training = max(training, default=0)
+        states = []
+        seen = set()
+        for item in _required_list(timeline.get("states"), "timeline.states"):
+            item = _required_mapping(item, "state")
+            state = {field: _required_int(item, field) for field in (
+                "season", "episode", "checkpoint", "final_n", "active_players",
+            )}
+            key = (state["season"], state["episode"], state["checkpoint"])
+            if (key in seen or not last_training < state["season"] <= metadata["current_season"]
+                    or state["episode"] < 1 or state["checkpoint"] < 0
+                    or state["active_players"] < 1 or state["final_n"] != state["active_players"]
+                    or (state["season"] == metadata["current_season"] and state["episode"] > metadata["latest_episode"])):
+                raise ValueError("Invalid or ineligible Timeline state")
+            seen.add(key)
+            board = validate_prediction_payload({
+                "metadata": {**metadata, "current_season": state["season"], "latest_episode": state["episode"],
+                             "latest_final_n": state["final_n"], "active_players": state["active_players"]},
+                "players": item.get("players"), "projected_boot_order": item.get("projected_boot_order"),
+                "evaluation": current["evaluation"],
+            })
+            ids = [player["castaway_id"] for player in board["players"]]
+            order_ids = [player["castaway_id"] for player in board["projected_boot_order"]]
+            if len(set(ids)) != len(ids) or set(ids) != set(order_ids) or not all(
+                math.isclose(sum(player[field] for player in board["players"]), 1.0, abs_tol=1e-6)
+                for field in ("next_boot_probability", "winner_probability")
+            ):
+                raise ValueError("Invalid Timeline distribution")
+            states.append((state, board))
+        available = {(state["season"], state["episode"]) for state, _board in states}
+        episodes = []
+        episode_keys = set()
+        for item in _required_list(timeline.get("episodes", [
+            {"season": season, "episode": episode, "available": True} for season, episode in sorted(available)
+        ]), "timeline.episodes"):
+            item = _required_mapping(item, "episode")
+            season_value, episode_value = _required_int(item, "season"), _required_int(item, "episode")
+            key = (season_value, episode_value)
+            if (key in episode_keys or not last_training < season_value <= metadata["current_season"]
+                    or episode_value < 1 or (season_value == metadata["current_season"] and episode_value > metadata["latest_episode"])
+                    or not isinstance(item.get("available"), bool) or item["available"] != (key in available)):
+                raise ValueError("Invalid Timeline episode coverage")
+            episode_keys.add(key)
+            episodes.append({"season": season_value, "episode": episode_value, "available": item["available"]})
+        if not available.issubset(episode_keys):
+            raise ValueError("Missing Timeline episode coverage")
+    except (TypeError, ValueError) as exc:
+        raise PredictionDataInvalid() from exc
+    if season is not None or episode is not None or checkpoint is not None:
+        match = next(((state, board) for state, board in states if (
+            state["season"], state["episode"], state["checkpoint"]
+        ) == (season, episode, checkpoint)), None)
+        if match is None:
+            raise PredictionApiError("Timeline checkpoint is unavailable or was used for training.", HTTPStatus.NOT_FOUND)
+        state, board = match
+        return {**board, "timeline_context": {**state, "note": note}}
+    return {"metadata": metadata, "note": note, "states": [state for state, _board in states], "episodes": episodes}
+
+
 def analytics_schema_payload(analytics_path: str | Path = DEFAULT_ANALYTICS) -> AnalyticsSchemaPayload:
     rows = analytics_rows(analytics_path)
     return {
@@ -403,6 +495,12 @@ def _validate_metadata(value: object) -> dict[str, object]:
     }
     if metadata.get("source_data") is not None:
         validated["source_data"] = dict(_required_mapping(metadata["source_data"], "metadata.source_data"))
+    if metadata.get("training_seasons") is not None:
+        training = _required_list(metadata["training_seasons"], "training_seasons")
+        if any(isinstance(season, bool) or not isinstance(season, int) or season < 1 for season in training):
+            raise ValueError("Invalid training seasons")
+        validated["training_seasons"] = training
+        validated["training_policy"] = _required_string(metadata, "training_policy")
     return validated
 
 
@@ -475,7 +573,7 @@ def _required_float(mapping: dict[str, object], field: str) -> float:
 
 def _required_probability(mapping: dict[str, object], field: str) -> float:
     value = _required_float(mapping, field)
-    if value < 0.0 or value > 1.0:
+    if not math.isfinite(value) or value < 0.0 or value > 1.0:
         raise ValueError(f"{field} must be between 0 and 1")
     return value
 
@@ -501,6 +599,14 @@ def create_app():
     @app.get("/api/predictions/current", response_model=PredictionResponse)
     def current_predictions() -> PredictionPayload:
         return prediction_payload()
+
+    @app.get("/api/predictions/timeline", response_model=None)
+    def prediction_timeline() -> dict[str, object]:
+        return timeline_payload(DEFAULT_PREDICTIONS)
+
+    @app.get("/api/predictions/timeline/{season}/{episode}/{checkpoint}", response_model=None)
+    def prediction_checkpoint(season: int, episode: int, checkpoint: int) -> dict[str, object]:
+        return timeline_payload(DEFAULT_PREDICTIONS, season=season, episode=episode, checkpoint=checkpoint)
 
     @app.get("/api/players/{castaway_id}", response_model=None)
     def player_profile(castaway_id: str) -> dict[str, object]:

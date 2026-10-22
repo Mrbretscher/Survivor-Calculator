@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,6 +22,7 @@ from survivor_calculator.api import (
     error_payload,
     prediction_payload,
     player_profile_payload,
+    timeline_payload,
 )
 
 
@@ -38,6 +40,14 @@ class SurvivorApiHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/predictions/current":
                 self._send_json(prediction_payload(DEFAULT_WORKBOOK, DEFAULT_PREDICTIONS))
+                return
+            if path == "/api/predictions/timeline":
+                self._send_json(timeline_payload(DEFAULT_PREDICTIONS))
+                return
+            match = re.fullmatch(r"/api/predictions/timeline/([0-9]+)/([0-9]+)/([0-9]+)", path)
+            if match:
+                season, episode, checkpoint = map(int, match.groups())
+                self._send_json(timeline_payload(DEFAULT_PREDICTIONS, season=season, episode=episode, checkpoint=checkpoint))
                 return
             if path == "/api/current-season":
                 payload = prediction_payload(DEFAULT_WORKBOOK, DEFAULT_PREDICTIONS)

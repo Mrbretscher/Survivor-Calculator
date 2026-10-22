@@ -1,8 +1,14 @@
+import itertools
+import math
 import unittest
 
 from survivor_calculator.baseline import HistoricalRateModel
 from survivor_calculator.evaluation import (
     PRIMARY_MODEL_NAME,
+    RANKING_METRIC_VERSION,
+    _score_events,
+    expected_top_k_hit,
+    evaluate_relationship_diagnostics,
     assert_chronological_split,
     evaluate_chronological,
     evaluate_pooled_random_holdout,
@@ -134,6 +140,99 @@ class ConstantRiskModel:
 
     def predict_risk(self, row: dict[str, object]) -> float:
         return 1.0
+
+
+class FairRankingTests(unittest.TestCase):
+    def test_uniform_scores_give_inverse_cohort_credit_for_every_outcome(self) -> None:
+        for size in range(1, 9):
+            for actual in range(size):
+                for k in (0, 1, 3, size, size + 2):
+                    with self.subTest(size=size, actual=actual, k=k):
+                        self.assertEqual(expected_top_k_hit([1.0] * size, actual, k), min(k, size) / size)
+
+    def test_partial_top_tie_and_untied_scores(self) -> None:
+        self.assertEqual(expected_top_k_hit([9.0, 9.0, 6.0, 3.0], 0, 1), 0.5)
+        self.assertEqual(expected_top_k_hit([9.0, 9.0, 6.0, 3.0], 2, 3), 1.0)
+        self.assertEqual(expected_top_k_hit([9.0, 8.0, 6.0, 3.0], 1, 1), 0.0)
+        self.assertEqual(expected_top_k_hit([9.0, 8.0, 6.0, 3.0], 3, 3), 0.0)
+
+    def test_ties_crossing_top_three_boundary_receive_fractional_credit(self) -> None:
+        self.assertEqual(expected_top_k_hit([9.0, 5.0, 5.0, 5.0, 1.0], 2, 3), 2 / 3)
+        self.assertEqual(expected_top_k_hit([9.0, 8.0, 5.0, 5.0, 5.0], 2, 3), 1 / 3)
+        self.assertEqual(expected_top_k_hit([5.0, 5.0, 5.0, 5.0, 1.0], 2, 3), 3 / 4)
+        self.assertEqual(expected_top_k_hit([9.0, 8.0, 7.0, 5.0, 5.0], 3, 3), 0.0)
+
+    def test_distinct_close_scores_are_not_rounded_into_ties(self) -> None:
+        scores = [1.0, 1.0 - 5e-13, 0.5]
+        self.assertEqual(expected_top_k_hit(scores, 0, 1), 1.0)
+        self.assertEqual(expected_top_k_hit(scores, 1, 1), 0.0)
+
+    def test_fractional_credit_matches_enumerated_random_tie_orders(self) -> None:
+        scores = [9.0, 5.0, 5.0, 5.0, 1.0]
+        orders = [[0, *tie_order, 4] for tie_order in itertools.permutations((1, 2, 3))]
+        for actual in range(len(scores)):
+            for k in range(len(scores) + 2):
+                oracle = sum(actual in order[:k] for order in orders) / len(orders)
+                self.assertEqual(expected_top_k_hit(scores, actual, k), oracle)
+
+    def test_scored_metrics_are_invariant_to_every_contestant_permutation(self) -> None:
+        for scores, actual in [([9.0, 5.0, 5.0, 5.0, 1.0], 2), ([4.0, 4.0, 1.0, 1.0], 0),
+                               ([4.0, 4.0, 1.0, 1.0], 2)]:
+            candidates = [{**_row(1, str(i), int(i == actual), 0), "score": score}
+                          for i, score in enumerate(scores)]
+            expected = _score_events("test", lambda r: r["score"], {(1, 1, 0): candidates})
+            for permuted in itertools.permutations(candidates):
+                result = _score_events("test", lambda r: r["score"], {(1, 1, 0): list(permuted)})
+                for metric in ("top1_accuracy", "top3_recall", "log_loss", "brier_score"):
+                    self.assertAlmostEqual(result[metric], expected[metric])
+
+    def test_probability_metrics_retain_their_independently_computed_values(self) -> None:
+        candidates = [{**_row(1, str(i), int(i == 1), 0), "score": score}
+                      for i, score in enumerate((5.0, 3.0, 1.0, 1.0))]
+        result = _score_events("test", lambda r: r["score"], {(1, 1, 0): candidates})
+        self.assertEqual([r["probability"] for r in result["predictions"]], [0.5, 0.3, 0.1, 0.1])
+        self.assertEqual(result["log_loss"], -math.log(0.3))
+        self.assertAlmostEqual(result["brier_score"], (0.5**2 + (0.3-1)**2 + 0.1**2 + 0.1**2) / 4)
+
+    def test_uniform_credit_is_averaged_per_event_with_different_cohort_sizes(self) -> None:
+        groups = {(1, 1, 0): [_row(1, str(i), int(i == 0), 0) for i in range(4)],
+                  (2, 1, 0): [_row(2, str(i), int(i == 0), 0) for i in range(2)]}
+        result = _score_events("uniform", lambda _: 1.0, groups)
+        self.assertEqual(result["top1_accuracy"], (1/4 + 1/2) / 2)
+        self.assertEqual(result["top3_recall"], (3/4 + 1) / 2)
+        self.assertEqual(result["log_loss"], (math.log(4) + math.log(2)) / 2)
+        self.assertAlmostEqual(result["brier_score"], (0.75 + 0.5) / 6)
+
+    def test_public_summaries_comparisons_and_slices_share_fair_metrics(self) -> None:
+        evaluation = evaluate_chronological(_evaluation_rows(), ConstantRiskModel, holdout_seasons=2,
+                                             model_name="constant_test_model")
+        self.assertEqual(evaluation["ranking_metric_version"], RANKING_METRIC_VERSION)
+        self.assertEqual(evaluation["metrics"]["ranking"]["tie_handling"], RANKING_METRIC_VERSION)
+        self.assertEqual(evaluation["top1_accuracy"], 1/3)
+        self.assertEqual(evaluation["metrics"]["ranking"]["top1_accuracy"], 1/3)
+        self.assertEqual(evaluation["top3_recall"], 1)
+        for row in evaluation["baseline_comparisons"]:
+            if row["name"] in {"constant_test_model", "uniform_random"}:
+                self.assertEqual(row["top1_accuracy"], 1/3)
+        diagnostics = evaluate_relationship_diagnostics(_evaluation_rows(), ConstantRiskModel,
+            model_name="constant_test_model", comparison_model_factories={}, holdout_seasons=[5, 6])
+        for report in [*diagnostics["per_season"].values(),
+                       diagnostics["slices"]["sparse_relationship_history"]]:
+            for row in report["baseline_comparisons"]:
+                if row["name"] in {"constant_test_model", "uniform_random"}:
+                    self.assertEqual(row["top1_accuracy"], 1/3)
+                    self.assertEqual(row["top3_recall"], 1)
+
+    def test_invalid_ranking_inputs_fail_clearly(self) -> None:
+        for scores, actual, k in [([], 0, 1), ([1.0], 1, 1), ([1.0], -1, 1), ([1.0], 0, -1),
+                                  ([1.0], 0, 1.5), ([float("nan")], 0, 1), ([float("inf")], 0, 1)]:
+            with self.subTest(scores=scores, actual=actual, k=k), self.assertRaises(ValueError):
+                expected_top_k_hit(scores, actual, k)
+
+    def test_multiple_actual_boots_are_rejected_instead_of_using_row_order(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one actual boot"):
+            _score_events("invalid", lambda _: 1.0,
+                          {(1, 1, 0): [_row(1, "A", 1, 0), _row(1, "B", 1, 0)]})
 
 
 if __name__ == "__main__":

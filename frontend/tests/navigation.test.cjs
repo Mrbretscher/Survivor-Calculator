@@ -30,6 +30,7 @@ const predictions = {
 test("navigation links open separate routes and identify the current section", () => {
   for (const [pathname, activeHref, current] of [
     ["/", "/", "page"],
+    ["/timeline", "/timeline", "page"],
     ["/analytics", "/analytics", "page"],
     ["/methodology", "/methodology", "page"],
     ["/contestants/US0759", "/", "location"]
@@ -37,7 +38,7 @@ test("navigation links open separate routes and identify the current section", (
     const Navigation = createLoader({ pathname })("../app/site-navigation.tsx").default;
     const markup = renderToStaticMarkup(jsx(Navigation, {}));
     assert.match(markup, /<nav[^>]*aria-label="Main navigation"/);
-    for (const [href, label] of [["/", "Predictions"], ["/analytics", "Analytics"], ["/methodology", "Methodology"]]) {
+    for (const [href, label] of [["/", "Predictions"], ["/timeline", "Timeline"], ["/analytics", "Analytics"], ["/methodology", "Methodology"]]) {
       assert.ok(markup.includes(`href="${href}"${href === activeHref ? ` aria-current="${current}"` : ""}>${label}</a>`));
     }
     assert.equal((markup.match(/aria-current=/g) || []).length, 1);
@@ -45,11 +46,17 @@ test("navigation links open separate routes and identify the current section", (
 });
 
 test("predictions page contains the board without analytics or evaluation", async () => {
-  const Home = createLoader({ fetch: async () => ({ ok: true, json: async () => predictions }) })("../app/page.tsx").default;
+  const calls = [];
+  const Home = createLoader({ fetch: async (url) => {
+    calls.push(url);
+    return { ok: true, json: async () => predictions };
+  } })("../app/page.tsx").default;
   const markup = renderToStaticMarkup(await Home());
   assert.match(markup, /id="current-board"/);
   assert.match(markup, /Projected boot order/);
-  assert.doesNotMatch(markup, /evaluation-title|analytics-title|Methodology Notes/);
+  assert.doesNotMatch(markup, /evaluation-title|analytics-title|Methodology Notes|timeline-title|<select/);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].endsWith("/api/predictions/current"));
 });
 
 test("methodology route preserves split, metrics, comparisons, calibration, and notes", async () => {
@@ -77,4 +84,47 @@ test("analytics route renders independently of the predictions API", () => {
   assert.match(markup, /Survivor analytics/);
   assert.match(markup, /id="analytics-title"/);
   assert.doesNotMatch(markup, /Prediction API unavailable|evaluation-title|id="current-board"/);
+});
+
+const timelineIndex = {
+  metadata: predictions.metadata,
+  note: "Reconstructed with the current model.",
+  states: [{ season: 51, episode: 5, checkpoint: 5, final_n: 16, active_players: 0 }],
+  episodes: [{ season: 51, episode: 5, available: true }]
+};
+
+test("Timeline route loads the index separately and renders its episode controls", async () => {
+  const calls = [];
+  const load = createLoader({ fetch: async (url) => {
+    calls.push(url);
+    return { ok: true, json: async () => url.endsWith("/timeline") ? timelineIndex : predictions };
+  } });
+  const route = load("../app/timeline/page.tsx");
+  const markup = renderToStaticMarkup(await route.default());
+  assert.equal(route.metadata.title, "Timeline | Survivor Calculator");
+  assert.match(markup, /id="timeline-title"/);
+  assert.equal((markup.match(/<select/g) || []).length, 3);
+  assert.ok(calls.some((url) => url.endsWith("/api/predictions/current")));
+  assert.ok(calls.some((url) => url.endsWith("/api/predictions/timeline")));
+});
+
+test("Timeline route handles missing predictions without rendering selection controls", async () => {
+  const Page = createLoader({ fetch: async () => ({ ok: false }) })("../app/timeline/page.tsx").default;
+  const markup = renderToStaticMarkup(await Page());
+  assert.match(markup, /Timeline temporarily unavailable/);
+  assert.match(markup, /href="\/"/);
+  assert.doesNotMatch(markup, /<select|id="current-board"/);
+});
+
+test("Timeline route preserves current predictions when the index is missing or from another snapshot", async () => {
+  for (const index of [null, { ...timelineIndex, metadata: { ...predictions.metadata, generated_at: "older" } }]) {
+    const Page = createLoader({ fetch: async (url) => ({
+      ok: url.endsWith("/current") || !!index,
+      json: async () => url.endsWith("/current") ? predictions : index
+    }) })("../app/timeline/page.tsx").default;
+    const markup = renderToStaticMarkup(await Page());
+    assert.match(markup, /Timeline is temporarily unavailable/);
+    assert.match(markup, /id="current-board"/);
+    assert.doesNotMatch(markup, /<select/);
+  }
 });

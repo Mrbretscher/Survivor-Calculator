@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -45,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     build_parser.add_argument(
         "--evaluation-strategy",
         choices=("pooled-random", "chronological"),
-        default="pooled-random",
+        default="chronological",
         help="Validation strategy to report in prediction metadata.",
     )
 
@@ -137,6 +139,12 @@ def build_from_tables(
         model_name=model_name,
         evaluation_strategy=evaluation_strategy,
     )
+    if source.is_file():
+        predictions.metadata["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    if features.current_relationships is not None:
+        relationships = {**features.current_relationships, "feature_timing_version": predictions.metadata["feature_timing_version"],
+                         "source": str(source), "source_sha256": predictions.metadata.get("source_sha256")}
+        (output_dir / "current_relationships.json").write_text(json.dumps(relationships, indent=2) + "\n", encoding="utf-8")
     predictions_path = save_predictions(predictions, output_dir / "current_predictions.json")
     dashboard_path = build_dashboard(predictions_path, output_dir / "dashboard.html")
 
@@ -148,6 +156,7 @@ def build_from_tables(
     print(f"Wrote analytics dataset: {analytics_path}")
     print(f"Wrote SOC mapping: {soc_path}")
     print(f"Wrote predictions: {predictions_path}")
+    print(f"Wrote relationship evidence: {output_dir / 'current_relationships.json'}")
     print(f"Wrote dashboard: {dashboard_path}")
     return 0
 

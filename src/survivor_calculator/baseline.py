@@ -13,13 +13,19 @@ from typing import Callable
 from survivor_calculator.evaluation import evaluate_chronological as _evaluate_chronological
 from survivor_calculator.evaluation import evaluate_pooled_random_holdout as _evaluate_pooled_random_holdout
 from survivor_calculator.evaluation import PRIMARY_MODEL_NAME, RiskModel
-from survivor_calculator.features import FEATURE_COLUMNS, FeatureBuildResult, assert_no_leakage_columns
+from survivor_calculator.features import FEATURE_COLUMNS, FEATURE_TIMING_VERSION, FeatureBuildResult, assert_no_leakage_columns
 
 EXPERIMENTAL_MODEL_NAME = "experimental_next_boot"
 OCCUPATION_TEXT_MODEL_NAME = "occupation_text_next_boot"
 HYBRID_MODEL_NAME = "hybrid_next_boot"
+SOCIAL_MODEL_NAME = "social_rate_next_boot"
+DIRECT_SOCIAL_MODEL_NAME = "social_direct_next_boot"
 DEFAULT_HYBRID_NON_OCCUPATION_WEIGHT = 0.9
 MODEL_NAME_ALIASES = {
+    SOCIAL_MODEL_NAME: SOCIAL_MODEL_NAME,
+    "social-rate-next-boot": SOCIAL_MODEL_NAME,
+    DIRECT_SOCIAL_MODEL_NAME: DIRECT_SOCIAL_MODEL_NAME,
+    "social-direct-next-boot": DIRECT_SOCIAL_MODEL_NAME,
     PRIMARY_MODEL_NAME: PRIMARY_MODEL_NAME,
     "historical-rate-baseline": PRIMARY_MODEL_NAME,
     "historical-rate": PRIMARY_MODEL_NAME,
@@ -40,14 +46,18 @@ class PredictionBundle:
     players: list[dict[str, object]]
     projected_boot_order: list[dict[str, object]]
     evaluation: dict[str, object]
+    timeline: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload = {
             "metadata": self.metadata,
             "players": self.players,
             "projected_boot_order": self.projected_boot_order,
             "evaluation": self.evaluation,
         }
+        if self.timeline is not None:
+            payload["timeline"] = self.timeline
+        return payload
 
 
 class HistoricalRateModel:
@@ -114,6 +124,40 @@ class HistoricalRateModel:
         }
 
 
+
+class SocialRateModel(HistoricalRateModel):
+    """Experimental historical rates augmented with observed relationship evidence.
+
+    Fixed buckets mirror the existing baseline. They are experiment settings,
+    not calibrated alliance thresholds. No contestant identifiers are features.
+    """
+
+    def __init__(self, include_protective: bool = True) -> None:
+        super().__init__()
+        self.include_protective = include_protective
+        self.weights.update({name: 1.0 for name in self._social_columns()})
+
+    def _social_columns(self) -> tuple[str, ...]:
+        columns = ("social_known_pair_fraction", "social_strongest_partner", "social_support_sum",
+                   "social_incoming_targeting", "social_original_tribe_support_gap")
+        if self.include_protective:
+            columns += ("social_protective_opposition_received", "social_protective_opposition_outgoing")
+        return columns
+
+    def _rate_features(self, row: dict[str, object]) -> dict[str, object]:
+        return {**super()._rate_features(row), **{
+            name: "unknown" if row.get(name) is None else _bucket(row[name], (0, 0.1, 0.3, 0.6))
+            for name in self._social_columns()
+        }}
+
+
+class DirectSocialRateModel(SocialRateModel):
+    """Ablation with coordination and targeting, excluding protective opposition."""
+
+    def __init__(self) -> None:
+        super().__init__(include_protective=False)
+
+
 class HybridNextBootModel:
     """Blend the historical-rate and occupation-text next-boot risk models."""
 
@@ -146,7 +190,7 @@ def build_predictions(
     features: FeatureBuildResult,
     workbook_path: str | Path,
     model_name: str = PRIMARY_MODEL_NAME,
-    evaluation_strategy: str = "pooled-random",
+    evaluation_strategy: str = "chronological",
 ) -> PredictionBundle:
     assert_no_leakage_columns(FEATURE_COLUMNS)
     resolved_model_name = resolve_model_name(model_name)
@@ -155,12 +199,13 @@ def build_predictions(
         row for row in features.historical_rows
         if int(row["season"]) < features.current_season
     ]
-    model = model_factory().fit(train_rows)
     comparison_factories = (
         {PRIMARY_MODEL_NAME: HistoricalRateModel}
         if resolved_model_name != PRIMARY_MODEL_NAME
         else None
     )
+    if resolved_model_name == SOCIAL_MODEL_NAME:
+        comparison_factories[DIRECT_SOCIAL_MODEL_NAME] = DirectSocialRateModel
     evaluation = _evaluate_model(
         features.historical_rows,
         model_factory,
@@ -169,8 +214,60 @@ def build_predictions(
         comparison_model_factories=comparison_factories,
     )
 
+    if resolved_model_name == SOCIAL_MODEL_NAME and evaluation_strategy == "chronological" and evaluation.get("status") == "ok":
+        from survivor_calculator.evaluation import evaluate_relationship_diagnostics
+
+        evaluation["relationship_diagnostics"] = evaluate_relationship_diagnostics(
+            features.historical_rows, model_factory, model_name=resolved_model_name,
+            comparison_model_factories=comparison_factories, holdout_seasons=evaluation["holdout_seasons"],
+        )
+    # Serve the same training boundary that evaluation reports. Re-fitting on
+    # held-out seasons would make their Timeline predictions in-sample.
+    if evaluation.get("status") == "ok":
+        training_seasons = set(evaluation["split"]["training_seasons"])
+        train_rows = [row for row in train_rows if int(row["season"]) in training_seasons]
+    training_seasons = sorted({int(row["season"]) for row in train_rows})
+    model = model_factory().fit(train_rows)
+    player_rows, projected_boot_order = predict_board(
+        model, features.current_rows, features.latest_final_n, resolved_model_name,
+    )
+    metadata = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "model_name": resolved_model_name,
+        "model_parameters": _model_parameters(resolved_model_name),
+        "feature_timing_version": FEATURE_TIMING_VERSION,
+        "training_seasons": training_seasons,
+        "training_policy": "evaluation_training_split" if evaluation.get("status") == "ok" else "all_available_completed_seasons",
+        "excluded_non_vote_states": features.excluded_non_vote_states,
+        "reconciled_state_rows": features.reconciled_state_rows,
+        "excluded_unlabelable_states": features.excluded_unlabelable_states,
+        "evaluation_strategy": evaluation_strategy,
+        "model_selection_policy": (
+            "historical_rate_baseline remains the default; experimental improvements "
+            "require chronological log loss, Brier score, calibration and slice review before promotion."
+        ),
+        "source_workbook": str(Path(workbook_path)),
+        "current_season": features.current_season,
+        "latest_episode": features.latest_episode,
+        "latest_final_n": features.latest_final_n,
+        "active_players": len(features.current_rows),
+        "disclaimer": "For-fun baseline probabilities, not production forecasts.",
+    }
+    from survivor_calculator.timeline import build_timeline
+
+    timeline = build_timeline(features, model, resolved_model_name, metadata)
+    return PredictionBundle(metadata, player_rows, projected_boot_order, evaluation, timeline)
+
+
+def predict_board(
+    model: RiskModel,
+    rows: list[dict[str, object]],
+    final_n: int,
+    model_name: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Score one roster using an already fitted model, without outcome labels."""
     raw_player_rows = []
-    for row in features.current_rows:
+    for row in rows:
         raw_risk = model.predict_risk(row)
         raw_player_rows.append(
             {
@@ -187,7 +284,7 @@ def build_predictions(
                 "raw_next_boot_risk": raw_risk,
                 "next_boot_probability": 0.0,
                 "winner_probability": 0.0,
-                "explanation": _explain(row, raw_risk, resolved_model_name),
+                "explanation": _explain(row, raw_risk, model_name),
             }
         )
 
@@ -201,24 +298,7 @@ def build_predictions(
         player["winner_probability"] = survival_score / total_survival
 
     player_rows = sorted(raw_player_rows, key=lambda item: item["winner_probability"], reverse=True)
-    projected_boot_order = _project_boot_order(player_rows, features.latest_final_n)
-    metadata = {
-        "generated_at": datetime.now(UTC).isoformat(),
-        "model_name": resolved_model_name,
-        "model_parameters": _model_parameters(resolved_model_name),
-        "evaluation_strategy": evaluation_strategy,
-        "model_selection_policy": (
-            "historical_rate_baseline remains the default; use experimental_next_boot "
-            "only when chronological holdout log loss and Brier score both improve."
-        ),
-        "source_workbook": str(Path(workbook_path)),
-        "current_season": features.current_season,
-        "latest_episode": features.latest_episode,
-        "latest_final_n": features.latest_final_n,
-        "active_players": len(features.current_rows),
-        "disclaimer": "For-fun baseline probabilities, not production forecasts.",
-    }
-    return PredictionBundle(metadata, player_rows, projected_boot_order, evaluation)
+    return player_rows, _project_boot_order(player_rows, final_n)
 
 
 def evaluate_chronological(rows: list[dict[str, object]], holdout_seasons: int = 5) -> dict[str, object]:
@@ -287,6 +367,9 @@ def _model_parameters(model_name: str) -> dict[str, object]:
             "non_occupation_weight": DEFAULT_HYBRID_NON_OCCUPATION_WEIGHT,
             "occupation_weight": 1.0 - DEFAULT_HYBRID_NON_OCCUPATION_WEIGHT,
         }
+    if model_name in {SOCIAL_MODEL_NAME, DIRECT_SOCIAL_MODEL_NAME}:
+        return {"protective_opposition": model_name == SOCIAL_MODEL_NAME,
+                "experimental": True, "social_bucket_thresholds": [0, 0.1, 0.3, 0.6]}
     return {}
 
 
@@ -309,6 +392,10 @@ def _project_boot_order(players: list[dict[str, object]], latest_final_n: int) -
 
 
 def _model_factory(model_name: str) -> Callable[[], RiskModel]:
+    if model_name == SOCIAL_MODEL_NAME:
+        return SocialRateModel
+    if model_name == DIRECT_SOCIAL_MODEL_NAME:
+        return DirectSocialRateModel
     if model_name == PRIMARY_MODEL_NAME:
         return HistoricalRateModel
     if model_name == EXPERIMENTAL_MODEL_NAME:
@@ -325,7 +412,9 @@ def _model_factory(model_name: str) -> Callable[[], RiskModel]:
 
 
 def _explain(row: dict[str, object], risk: float, model_name: str) -> list[str]:
-    if model_name == EXPERIMENTAL_MODEL_NAME:
+    if model_name in {SOCIAL_MODEL_NAME, DIRECT_SOCIAL_MODEL_NAME}:
+        label = "Experimental social model"
+    elif model_name == EXPERIMENTAL_MODEL_NAME:
         label = "Experimental model"
     elif model_name == OCCUPATION_TEXT_MODEL_NAME:
         label = "Occupation text model"
@@ -342,6 +431,12 @@ def _explain(row: dict[str, object], risk: float, model_name: str) -> list[str]:
         reasons.append("Advantage timeline shows an advantage held at least once.")
     if float(row.get("confessionals_to_date") or 0) == 0:
         reasons.append("Low recorded confessional visibility so far.")
+    if model_name in {SOCIAL_MODEL_NAME, DIRECT_SOCIAL_MODEL_NAME}:
+        reasons.append("Voting relationships are evidence proxies, not confirmed alliances.")
+        if row.get("social_strongest_partner") is None:
+            reasons.append("No shared-vote evidence with current tribemates is available.")
+        if float(row.get("social_protective_opposition_received") or 0) > 0:
+            reasons.append("Prior targeting includes apparent allies of current tribemates; protective opposition is possible.")
     return reasons
 
 

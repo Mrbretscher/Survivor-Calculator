@@ -9,7 +9,7 @@ import shutil
 import tomllib
 from pathlib import Path
 
-from survivor_calculator.api import analytics_schema_payload, prediction_payload
+from survivor_calculator.api import analytics_schema_payload, prediction_payload, timeline_payload
 
 
 def prepare_bundle(repository: Path, data_dir: Path, output_dir: Path) -> Path:
@@ -22,6 +22,9 @@ def prepare_bundle(repository: Path, data_dir: Path, output_dir: Path) -> Path:
     predictions_path = data_dir / "current_predictions.json"
     analytics_path = data_dir / "analytics_player_season.csv"
     predictions = prediction_payload(predictions_path=predictions_path)
+    # Older snapshots can still be served; new ones must have a usable Timeline.
+    if "timeline" in json.loads(predictions_path.read_text(encoding="utf-8")):
+        timeline_payload(predictions_path)
     analytics = analytics_schema_payload(analytics_path=analytics_path)
     if not predictions["players"] or not analytics["dataset"]["row_count"]:
         raise ValueError("Cannot prepare a deployment with empty prediction or analytics data.")

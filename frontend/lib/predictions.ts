@@ -34,11 +34,67 @@ export type PredictionPayload = {
     latest_final_n: number;
     active_players: number;
     disclaimer: string;
+    training_seasons?: number[];
+    training_policy?: string;
   };
   players: Player[];
   projected_boot_order: ProjectedBoot[];
   evaluation: Record<string, unknown>;
 };
+
+export type TimelineState = {
+  season: number;
+  episode: number;
+  checkpoint: number;
+  final_n: number;
+  active_players: number;
+};
+
+export type TimelineIndex = {
+  metadata: PredictionPayload["metadata"];
+  note: string;
+  states: TimelineState[];
+  episodes?: { season: number; episode: number; available: boolean }[];
+};
+
+export type TimelinePrediction = PredictionPayload & {
+  timeline_context: TimelineState & { note: string };
+};
+
+export async function getTimeline(): Promise<TimelineIndex | null> {
+  try {
+    const response = await fetch(`${API_BASE}/api/predictions/timeline`, {
+      next: { revalidate: 60 }
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return Array.isArray(payload.states) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+export function timelineStateKey(state: TimelineState): string {
+  return `${state.season}/${state.episode}/${state.checkpoint}`;
+}
+
+export async function getTimelinePrediction(
+  state: TimelineState,
+  generatedAt: string
+): Promise<TimelinePrediction> {
+  const response = await fetch(`${API_BASE}/api/predictions/timeline/${timelineStateKey(state)}`, {
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error("This checkpoint is unavailable. Refresh to load the latest Timeline.");
+  const payload: TimelinePrediction = await response.json();
+  if (payload.metadata.generated_at !== generatedAt) {
+    throw new Error("Predictions have updated. Refresh to load the latest Timeline.");
+  }
+  if (!payload.timeline_context || timelineStateKey(payload.timeline_context) !== timelineStateKey(state)) {
+    throw new Error("The selected checkpoint could not be loaded. Please try again.");
+  }
+  return payload;
+}
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";

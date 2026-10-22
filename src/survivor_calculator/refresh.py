@@ -154,6 +154,11 @@ def refresh(output_dir: Path, model_name: str = "historical-rate-baseline", *, f
             predictions["metadata"]["source_workbook"] = "upstream-json (no workbook)"
             predictions["metadata"]["source_data"] = provenance
             predictions_path.write_text(json.dumps(predictions, indent=2) + "\n", encoding="utf-8")
+            relationship_path = staged / "current_relationships.json"
+            if relationship_path.exists():
+                relationships = json.loads(relationship_path.read_text(encoding="utf-8"))
+                relationships["source_data"] = provenance
+                relationship_path.write_text(json.dumps(relationships, indent=2) + "\n", encoding="utf-8")
             build_dashboard(predictions_path, staged / "dashboard.html")
             manifest = {**provenance, "settings": settings, "output_sha256": {
                 path.relative_to(staged).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
