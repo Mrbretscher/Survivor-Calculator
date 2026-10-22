@@ -16,21 +16,23 @@ export default function PredictionExplorer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState<{ season: number; episode: number } | null>(null);
+  const [season, setSeason] = useState<number | "">("");
+  const [episode, setEpisode] = useState<number | "">("");
   const request = useRef(0);
   const states = timeline?.states ?? [];
   const coverage = timeline?.episodes ?? states.map((state) => ({ ...state, available: true }));
   const seasons = [...new Set(coverage.map((item) => item.season))].sort((a, b) => b - a);
-  const season = unavailable?.season ?? selection?.season ?? current.metadata.current_season;
-  const episode = unavailable?.episode ?? selection?.episode ?? current.metadata.latest_episode;
   const seasonStates = states.filter((state) => state.season === season);
   const episodes = [...new Set(coverage.filter((item) => item.season === season).map((item) => item.episode))].sort((a, b) => a - b);
   const checkpoints = seasonStates.filter((state) => state.episode === episode);
-  const payload = unavailable ? null : selection ? replay : current;
+  const payload = showTimeline ? replay : current;
   const highestBoot = payload?.projected_boot_order[0];
   const lastTraining = Math.max(0, ...(current.metadata.training_seasons ?? []));
 
   async function selectState(state: TimelineState) {
     const token = ++request.current;
+    setSeason(state.season);
+    setEpisode(state.episode);
     setSelection(state);
     setUnavailable(null);
     setReplay(null);
@@ -50,7 +52,20 @@ export default function PredictionExplorer({
     ++request.current;
     setSelection(null);
     setUnavailable(null);
+    setSeason(current.metadata.current_season);
+    setEpisode(current.metadata.latest_episode);
+    setReplay(current);
+    setError(null);
+    setLoading(false);
+  }
+
+  function selectSeason(value: string) {
+    ++request.current;
+    setSeason(value === "" ? "" : Number(value));
+    setEpisode("");
+    setSelection(null);
     setReplay(null);
+    setUnavailable(null);
     setError(null);
     setLoading(false);
   }
@@ -61,6 +76,8 @@ export default function PredictionExplorer({
       void selectState(state);
     } else {
       ++request.current;
+      setSeason(seasonValue);
+      setEpisode(episodeValue);
       setSelection(null);
       setUnavailable({ season: seasonValue, episode: episodeValue });
       setReplay(null);
@@ -86,18 +103,16 @@ export default function PredictionExplorer({
         </p>
         <div className="timelineControls" aria-describedby="timeline-help">
           <label>Season
-            <select value={season} onChange={(event) => {
-              const value = Number(event.target.value);
-              const first = coverage.filter((item) => item.season === value).sort((a, b) => a.episode - b.episode)[0];
-              if (first) selectEpisode(value, first.episode);
-            }}>
+            <select value={season} onChange={(event) => selectSeason(event.target.value)}>
+              <option value="" disabled>Select season</option>
               {seasons.map((value) => <option key={value} value={value}>Season {value}{value === current.metadata.current_season ? " · Current" : " · Held out"}</option>)}
             </select>
           </label>
           <label>Episode
-            <select value={episode} onChange={(event) => {
-              selectEpisode(season, Number(event.target.value));
+            <select disabled={season === ""} value={episode} onChange={(event) => {
+              if (season !== "") selectEpisode(season, Number(event.target.value));
             }}>
+              <option value="" disabled>Select episode</option>
               {episodes.map((value) => <option key={value} value={value}>Episode {value}{coverage.some((item) => item.season === season && item.episode === value && item.available) ? "" : " · Unavailable"}</option>)}
             </select>
           </label>
@@ -106,7 +121,7 @@ export default function PredictionExplorer({
               const state = checkpoints.find((item) => timelineStateKey(item) === event.target.value);
               if (state) void selectState(state);
             }}>
-              {!checkpoints.length && <option value="">No validated forecast</option>}
+              {!checkpoints.length && <option value="">{episode === "" ? "Select episode first" : "No validated forecast"}</option>}
               {checkpoints.map((state) => <option key={timelineStateKey(state)} value={timelineStateKey(state)}>
                 {state.checkpoint} exits completed · {state.active_players} active players
               </option>)}
@@ -118,7 +133,7 @@ export default function PredictionExplorer({
           }}>View checkpoint</button>
         </div>
         <p className="mutedText">Episodes without a validated voting forecast are marked unavailable. Multiple checkpoints preserve separate councils within an episode.</p>
-      </> : <p className="boardNote">Timeline is temporarily unavailable for this snapshot. Current predictions are shown below.</p>}
+      </> : <p className="boardNote">Timeline is temporarily unavailable for this snapshot. Please try again later.</p>}
     </section>}
 
     <div aria-live="polite" aria-busy={loading}>

@@ -2,7 +2,7 @@
 
 Open **Timeline** in the main navigation, or visit `/timeline`, to browse forecasts for recorded episodes and checkpoints. The **Predictions** page at `/` shows the latest current-season forecast.
 
-Choose a season, episode and checkpoint. Separate checkpoints preserve multiple recorded councils within an episode. The selected board shows the recorded active cast, next-boot probabilities, exploratory winner scores and projected boot order. **Back to current prediction** restores the latest checkpoint on Timeline; **Predictions** in the navigation returns to the current-only page.
+Timeline opens with only its selection panel and no prediction loaded. Choose a season, then an episode and checkpoint to view its forecast. Changing the season clears the displayed forecast until you choose another episode. Separate checkpoints preserve multiple recorded councils within an episode. The selected board shows the recorded active cast, next-boot probabilities, exploratory winner scores and projected boot order. **Back to current prediction** restores the latest checkpoint on Timeline; **Predictions** in the navigation returns to the current-only page.
 
 ## Training boundary and interpretation
 

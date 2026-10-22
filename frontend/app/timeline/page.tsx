@@ -24,7 +24,7 @@ export default async function TimelinePage() {
   const matchingTimeline = timeline?.metadata.generated_at === current.metadata.generated_at ? timeline : null;
   return (
     <main className="shell">
-      <a className="skipLink" href="#current-board">Skip to prediction board</a>
+      <a className="skipLink" href="#timeline-title">Skip to Timeline</a>
       <PredictionExplorer current={current} timeline={matchingTimeline} />
     </main>
   );

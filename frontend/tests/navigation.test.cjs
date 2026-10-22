@@ -104,6 +104,7 @@ test("Timeline route loads the index separately and renders its episode controls
   assert.equal(route.metadata.title, "Timeline | Survivor Calculator");
   assert.match(markup, /id="timeline-title"/);
   assert.equal((markup.match(/<select/g) || []).length, 3);
+  assert.doesNotMatch(markup, /id="current-board"|id="dashboard-title"|Projected boot order/);
   assert.ok(calls.some((url) => url.endsWith("/api/predictions/current")));
   assert.ok(calls.some((url) => url.endsWith("/api/predictions/timeline")));
 });
@@ -116,7 +117,7 @@ test("Timeline route handles missing predictions without rendering selection con
   assert.doesNotMatch(markup, /<select|id="current-board"/);
 });
 
-test("Timeline route preserves current predictions when the index is missing or from another snapshot", async () => {
+test("Timeline route stays empty when the index is missing or from another snapshot", async () => {
   for (const index of [null, { ...timelineIndex, metadata: { ...predictions.metadata, generated_at: "older" } }]) {
     const Page = createLoader({ fetch: async (url) => ({
       ok: url.endsWith("/current") || !!index,
@@ -124,7 +125,6 @@ test("Timeline route preserves current predictions when the index is missing or 
     }) })("../app/timeline/page.tsx").default;
     const markup = renderToStaticMarkup(await Page());
     assert.match(markup, /Timeline is temporarily unavailable/);
-    assert.match(markup, /id="current-board"/);
-    assert.doesNotMatch(markup, /<select/);
+    assert.doesNotMatch(markup, /<select|id="current-board"|id="dashboard-title"/);
   }
 });
